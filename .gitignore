@@ -1,0 +1,46 @@
+# Virtual environment
+land_valuation_env/
+venv/
+
+# Python cache files
+*.pyc
+__pycache__/
+
+# Selenium/Chromedriver cache
+selenium/
+.webdrivers/
+chromedriver*
+*.log
+
+# Browser cache (Chrome, used by Selenium)
+*.cache/
+*.session/
+*.cookies/
+*.localstorage/
+*.tmp/
+
+# Node.js cache (for frontend)
+node_modules/
+npm-debug.log
+.pnpm-debug.log
+.pnpm-store/
+.env
+# Frontend build artifacts
+dist/
+build/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Logs (but not dashboard/app/logs/)
+/logs/
+*.log
+
+#debug
+dynamo_debug/
+
+
+#docs
+docs/
