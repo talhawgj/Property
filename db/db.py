@@ -1,6 +1,7 @@
 from sqlmodel import SQLModel, create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.pool import NullPool
 from config import config
 from sqlalchemy.orm import sessionmaker
 from typing import AsyncGenerator
@@ -17,6 +18,7 @@ engine = AsyncEngine(create_engine(
     pool_recycle=1800,  # Recycle connections after 30 minutes (before PostgreSQL times out)
     pool_pre_ping=True,  # Check connection health before using
     pool_use_lifo=True,  # Use most recently returned connection first (keeps pool smaller)
+    # poolclass=NullPool,  # Use NullPool to disable pooling (for testing)
     connect_args={
         "server_settings": {
             "application_name": "fastapi_gis_app",
@@ -34,8 +36,8 @@ async def init_db():
         async with engine.begin() as conn:
             result = await conn.execute(text("SELECT PostGIS_Version();"))
             print(result.scalar())
-            # from models.job import BatchJob
-            # await conn.run_sync(SQLModel.metadata.create_all)
+            from schemas import AnalysisResult
+            await conn.run_sync(SQLModel.metadata.create_all)
         logger.info("Database initialization completed successfully")
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}", exc_info=True)

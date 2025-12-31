@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse, PlainTextResponse
 from routes import water_router, parcel_router, gis_router,image_router, analysis_router, stripe_router, stripe_billing_router,require_api_token
 from redis import asyncio as aioredis
+from utils.webdriver_pool import WebDriverPool
 from db import init_db
 from config import config
 import logging
@@ -30,9 +31,12 @@ def verify_api_key(x_api_key: str = Header(...)):
 async def lifespan(app: FastAPI):
     redis = aioredis.from_url("redis://localhost:6379", encoding="utf-8", decode_responses=True)
     app.state.redis = redis
+    await WebDriverPool().initialize()  # Initialize the WebDriver pool
     await init_db()
     yield
     await redis.close()
+    await WebDriverPool()._close_drivers()  # Close the WebDriver pool
+
 app = FastAPI(
     title="Land Valuation API",
     description="API for land valuation",

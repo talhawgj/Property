@@ -20,6 +20,7 @@ from schemas import AnalysisResult
 from .gis import GISAnalysisService
 from .water import WaterAnalysisService
 from .image import ImageService
+
 analysis_logger = logging.getLogger("batch_analysis")
 analysis_logger.setLevel(logging.INFO)
 os.makedirs("logs", exist_ok=True)
@@ -32,6 +33,7 @@ formatter = logging.Formatter(
 analysis_handler.setFormatter(formatter)
 analysis_logger.addHandler(analysis_handler)
 analysis_logger.propagate = False
+
 class AnalysisService:
     def __init__(self):
         try:
@@ -44,12 +46,10 @@ class AnalysisService:
         except Exception as e:
             analysis_logger.error(f"Failed to initialize AnalysisService: {str(e)}")
             raise RuntimeError(f"Failed to initialize AnalysisService: {str(e)}") from e
-
     async def __get_parcel_data(self, gid: int, session: AsyncSession) -> Dict[str, Any]:
         """Fetches metadata and simplified geometry for analysis."""
         if not gid:
             raise ValueError("GID parameter is required")
-        
         try:
             query = text("""
                 SELECT 
@@ -72,10 +72,8 @@ class AnalysisService:
                     ON ST_Within(p.geom, c.geometry)
                 WHERE p.gid = :gid
             """)
-            
             result = await session.execute(query, {"gid": gid})
             parcel_data = result.mappings().first()
-            
             if not parcel_data:
                 return {}
             return dict(parcel_data)
@@ -102,26 +100,34 @@ class AnalysisService:
         except Exception as e:
             analysis_logger.error(f"Task '{key}' failed: {e}")
             return key, {"error": str(e), "status": "failed"}
-
     async def _exec_with_session(self, func: Callable, **kwargs) -> Any:
         async with self.semaphore:
             async with SessionLocal() as session:
                 return await func(session, **kwargs)
-
-    async def _save_results(self, session: AsyncSession, gid: int, data: Dict, batch_id: Optional[str], mode: str):
+    async def _save_results(
+        self, 
+        session: AsyncSession, 
+        gid: int, 
+        data: Dict, 
+        batch_id: Optional[str], 
+        mode: str,
+        csv_context: Optional[Dict] = None
+    ):
         """
         Upsert analysis results into the database.
+        csv_context is saved to a separate JSONB column (csv_source_data) if provided.
         """
         try:
             stmt = select(AnalysisResult).where(AnalysisResult.parcel_gid == gid)
             result = await session.execute(stmt)
             existing_record = result.scalars().first()
-
             if existing_record:
-                # Update existing record
                 existing_record.result_data = data
                 existing_record.batch_id = batch_id
                 existing_record.processing_mode = mode
+                if csv_context:
+                    existing_record.csv_source_data = csv_context
+                
                 session.add(existing_record)
                 analysis_logger.info(f"Updated analysis record for GID {gid}")
             else:
@@ -129,63 +135,49 @@ class AnalysisService:
                     parcel_gid=gid,
                     result_data=data,
                     batch_id=batch_id,
-                    processing_mode=mode
+                    processing_mode=mode,
+                    csv_source_data=csv_context 
                 )
                 session.add(new_record)
                 analysis_logger.info(f"Created new analysis record for GID {gid}")
-
             await session.commit()
         except Exception as e:
             analysis_logger.error(f"Failed to save analysis to DB for GID {gid}: {e}")
             await session.rollback()
-
     async def get_analysis(
         self, 
         gid: int, 
         db: AsyncSession, 
         processing_mode: Literal["single", "batch"] = "single", 
         batch_id: Optional[str] = None, 
-        generate_images: bool = False,
+        generate_images: bool = True,
         force_refresh: bool = False,       
         csv_context: Optional[Dict] = None 
     ) -> Dict[str, Any]:
-        
         start_time = time.perf_counter()
         analysis_logger.info(f"Starting analysis for GID: {gid} | Mode: {processing_mode}")
-        
         try:
-            # 1. CHECK DB Cache (Unless forcing refresh)
             if not force_refresh:
                 stmt = select(AnalysisResult).where(AnalysisResult.parcel_gid == gid)
                 result = await db.execute(stmt)
                 existing = result.scalars().first()
-                
                 if existing:
                     analysis_logger.info(f"Found existing analysis for GID {gid}. Skipping GIS.")
                     data = existing.result_data
-                    
-                    # If this is a batch run, we MUST update the record with the new Batch ID and CSV Data
                     if processing_mode == "batch":
-                        if csv_context:
-                            data["csv_data"] = csv_context
-                        
                         existing.batch_id = batch_id
                         existing.processing_mode = "batch"
                         existing.result_data = data
+                        if csv_context:
+                            existing.csv_source_data = csv_context
+                        
                         db.add(existing)
                         await db.commit()
-                        
                     return data
-
-            # 2. RUN FRESH ANALYSIS (If no cache or forced)
-            # Fetch Data
             parcel_data = await self.__get_parcel_data(gid, db)
             if not parcel_data:
                 return {"error": f"No parcel found with GID: {gid}"}
-            
             parcel_geom_wkt = parcel_data.get("geom")
-
-            # Define Tasks
             analysis_tasks_map = {
                 "gas_lines": self.gis_service.analyze_gas_pipelines,
                 "electric_lines": self.gis_service.analyze_electric_lines,
@@ -202,7 +194,6 @@ class AnalysisService:
                 "sea_ocean_length": self.water_service.analyze_sea_ocean,
                 "shoreline_analysis": self.water_service.analyze_shoreline,
             }
-
             image_tasks_map = {}
             if generate_images:
                 image_tasks_map = {
@@ -213,22 +204,15 @@ class AnalysisService:
                     "contour_image_url": self.image_service.get_contour_image,
                     "water_image_url": self.image_service.get_water_image,
                 }
-
-            # Schedule Tasks
             futures = []
             for key, func in analysis_tasks_map.items():
                 coro = self._exec_with_session(func, gid=None, geom=parcel_geom_wkt)
                 futures.append(self._safe_run(key, coro))
-
             for key, func in image_tasks_map.items():
                 coro = self._exec_with_session(func, gid=gid, geom=parcel_geom_wkt)
                 futures.append(self._safe_run(key, coro))
-
-            # Execute
             results_list = await asyncio.gather(*futures)
             analysis_results = {k: v for k, v in results_list}
-
-            # Sanitize Data
             def recursive_sanitize(obj: Any) -> Any:
                 if isinstance(obj, dict):
                     return {k: recursive_sanitize(v) for k, v in obj.items()}
@@ -249,16 +233,15 @@ class AnalysisService:
                     "execution_time_seconds": round(duration, 2)
                 }
             }
-            
-            # Inject CSV Data if provided
-            if csv_context:
-                final_output["csv_data"] = csv_context
-
-            # SAVE TO DB
-            await self._save_results(db, gid, final_output, batch_id, processing_mode)
-
+            await self._save_results(
+                session=db, 
+                gid=gid, 
+                data=final_output, 
+                batch_id=batch_id, 
+                mode=processing_mode,
+                csv_context=csv_context
+            )
             return final_output
-
         except Exception as e:
             analysis_logger.error(f"Critical error analyzing {gid}: {e}")
             return {"error": str(e), "gid": gid}

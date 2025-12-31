@@ -39,6 +39,10 @@ class AnalysisResult(SQLModel, table=True):
     )
     batch_id: Optional[str] = Field(default=None, index=True)
     processing_mode: str = Field(default="single")
+    csv_source_data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True) # separate column for CSV context
+    )
     result_data: Dict[str, Any] = Field(
         default={},
         sa_column=Column(JSONB, nullable=False)

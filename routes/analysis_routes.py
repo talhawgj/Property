@@ -4,19 +4,14 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
-from celery.result import AsyncResult 
 
 from db import get_session 
-from config import config
 from models.job import BatchJob, JobStatus, JobPriority
 from services import batch_service
-
-# FIX: Explicit import to ensure we get the configured Celery app
-from worker.worker import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +31,7 @@ async def parcel_analysis(
 
 @router.post("/analyze/batch", response_model=BatchJob)
 async def submit_batch_job(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     column_mapping: Optional[str] = Form(None, description='JSON string e.g. {"Lat": "PropertyLatitude"}'),
     priority: JobPriority = Form(JobPriority.NORMAL),
@@ -45,11 +41,11 @@ async def submit_batch_job(
     db: AsyncSession = Depends(get_session)
 ):
     """
-    Uploads file -> Creates Job (Queued) -> Dispatches to Celery.
-    Returns Job ID immediately.
+    Uploads file -> Creates Job (Queued) -> Starts Background Task.
     """
     if not file.filename or not file.filename.lower().endswith(('.csv', '.xls', '.xlsx')):
         raise HTTPException(status_code=400, detail="Invalid file type. Only CSV or Excel allowed.")
+    
     mapping_dict = {}
     if column_mapping:
         try:
@@ -58,16 +54,26 @@ async def submit_batch_job(
             raise HTTPException(status_code=400, detail="Invalid JSON format for column_mapping")
 
     try:
-        new_job = await batch_service.submit_job_to_celery(
+        # 1. Save file and create DB entry
+        new_job, file_path = await batch_service.create_job_with_file(
             file=file,
             db=db,
             user_id=user_id,
             username=username,
+            priority=priority
+        )
+
+        # 2. Add to BackgroundTasks (FastAPI will run this after response is sent)
+        background_tasks.add_task(
+            batch_service.process_job_background,
+            job_id=new_job.job_id,
+            file_path=file_path,
             column_mapping=mapping_dict,
-            priority=priority,
             dry_run=dry_run
         )
+
         return new_job
+
     except Exception as e:
         logger.error(f"Failed to submit batch job: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -78,15 +84,13 @@ async def cancel_job(
     db: AsyncSession = Depends(get_session)
 ):
     """
-    Cancels a job if it is Queued or Processing.
+    Cancels a job. The background task checks DB status and will stop if it sees CANCELLED.
     """
     job = await db.get(BatchJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
     if job.status in [JobStatus.QUEUED, JobStatus.PROCESSING]:
-        celery_app.control.revoke(job_id, terminate=True)
-        
         job.status = JobStatus.CANCELLED
         job.error_message = "Cancelled by user"
         job.completed_at = datetime.utcnow()
@@ -101,46 +105,17 @@ async def get_job_progress(
     db: AsyncSession = Depends(get_session)
 ):
     """
-    Checks DB first (Source of Truth). Only checks Redis if DB says processing.
+    Check DB for progress.
     """
-    # 1. Check DB Status FIRST
     job = await db.get(BatchJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # If done/cancelled, return immediately (ignore Redis)
-    if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
-        percent = 100 if job.status == JobStatus.COMPLETED else 0
-        return {
-            "job_id": job_id,
-            "status": job.status,
-            "progress": {
-                "current": job.completed_rows,
-                "total": job.total_rows,
-                "percent": percent
-            },
-            "error": job.error_message,
-            "result_url": f"/batch/download/{job_id}" if job.status == JobStatus.COMPLETED else None
-        }
-
-    # 2. If DB says PROCESSING, check Redis for live real-time updates
-    # This captures the updates between the DB commits (every 10 rows)
-    try:
-        task_result = AsyncResult(job_id, app=celery_app)
-        # Ensure we have a valid state AND valid info dictionary
-        if task_result.state == 'PROGRESS' and isinstance(task_result.info, dict):
-            return {
-                "job_id": job_id,
-                "status": "processing",
-                "progress": task_result.info # {'current': x, 'total': y, 'percent': z}
-            }
-    except Exception as e:
-        logger.warning(f"Failed to fetch Redis progress for {job_id}: {e}")
-
-    # 3. Fallback (Redis empty/failed, use DB values)
     percent = 0
     if job.total_rows > 0:
         percent = int((job.completed_rows / job.total_rows) * 100)
+    elif job.status == JobStatus.COMPLETED:
+        percent = 100
 
     return {
         "job_id": job_id,
@@ -151,7 +126,7 @@ async def get_job_progress(
             "percent": percent
         },
         "error": job.error_message,
-        "result_url": None
+        "result_url": f"/batch/download/{job_id}" if job.status == JobStatus.COMPLETED else None
     }
 
 @router.get("/batch/download/{job_id}")

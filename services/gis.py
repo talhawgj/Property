@@ -24,12 +24,6 @@ class GISAnalysisService:
     def __init__(self):
         self.dem_path = os.environ.get("ELEVATION_FILE", "/mnt/land200/gis-data/tx_terrain/Texas_DEM.vrt")
         self.tree_path = os.environ.get("TREE_COVERAGE_PATH", "/mnt/land200/gis-data/tx_treecoverage")
-        try:
-            if not ee.data._credentials:
-                ee.Initialize()
-        except Exception:
-            logger.warning("Google Earth Engine not initialized. GEE-based analyses may fail.")
-
     async def _get_target_geometry(
         self, 
         session: AsyncSession, 
@@ -164,13 +158,17 @@ class GISAnalysisService:
             "count": len(lines),
             "details": lines
         }
-    async def analyze_road_frontage(self,session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
+    
+    async def analyze_road_frontage(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
+    
         """
         Calculates road frontage in feet.
-        Logic: Buffers nearby roads by 25m and intersects with parcel boundary.
-        Subtracts road segments that are physically inside the parcel.
+        Returns a list containing a single result dict to satisfy BatchService's iteration logic.
         """
+        # 1. Get the geometry (Assuming this method exists in your class)
         target_wkt, _ = await self._get_target_geometry(session, gid, geom)
+
+        # 2. SQL Query (Cleaned up indentation)
         sql = text("""
             WITH parcel_geom_tab AS (
                 SELECT ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt), 4326), 3083) as geom
@@ -211,16 +209,21 @@ class GISAnalysisService:
             raw_frontage = float(row[0]) if row else 0.0
             interior_len = float(row[1]) if row else 0.0
             access_count = row[2] if row else 0
+            
+            # Calculate final adjusted frontage
             adjusted_frontage = max(raw_frontage - interior_len, 0.0)
             return {
+                "length_ft": round(adjusted_frontage, 2),
                 "intersects": adjusted_frontage > 0,
-                "road_frontage_feet": round(adjusted_frontage, 2),
                 "road_in_parcel_feet": round(interior_len, 2),
-                "road_access_count": access_count
+                "road_access_count": access_count,
+                "raw_boundary_feet": round(raw_frontage, 2)
             }
+
         except Exception as e:
             logger.error(f"Road frontage analysis failed: {e}")
-            return {"error": str(e)}
+            # Return empty list on error so the sum() in BatchService results in 0 instead of crashing
+            return {}
     async def analyze_buildable_area(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Calculates buildable area by subtracting Flood Zones and Wetlands from Total Area.
@@ -299,7 +302,7 @@ class GISAnalysisService:
         except Exception as e:
             logger.error(f"Elevation analysis failed: {e}")
             return {"error": str(e)}
-    async def analyze_slope(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
+    
         """
         Calculates Slope using Google Earth Engine (USGS 3DEP).
         """

@@ -19,7 +19,7 @@ batch_logger = logging.getLogger("batch_analysis")
 
 class BatchService:
     _instance: Optional["BatchService"] = None
-    analysis_service: Optional[AnalysisService] = None
+    analysis_service: Optional[AnalysisService] = AnalysisService()
 
     def __new__(cls) -> "BatchService":
         if cls._instance is None:
@@ -27,24 +27,24 @@ class BatchService:
             cls._instance.analysis_service = AnalysisService()
         return cls._instance
 
-    async def submit_job_to_celery(
+    async def create_job_with_file(
         self,
         file: UploadFile,
         db: AsyncSession,
         user_id: str,
         username: str,
-        column_mapping: Optional[Dict[str, str]] = None,
-        priority: JobPriority = JobPriority.NORMAL,
-        dry_run: bool = False
-    ) -> BatchJob:
-        
+        priority: JobPriority = JobPriority.NORMAL
+    ) -> Tuple[BatchJob, str]:
+        """
+        Saves the uploaded file and creates the initial Job record.
+        Returns the job object and the path to the saved file.
+        """
         job_id = uuid.uuid4().hex
-        
-        # Save file
         temp_dir = os.getenv("UPLOAD_DIR", "/tmp/uploads")
         os.makedirs(temp_dir, exist_ok=True)
-        file_path = os.path.join(temp_dir, f"{job_id}_{file.filename}")
         
+        # Save file locally
+        file_path = os.path.join(temp_dir, f"{job_id}_{file.filename}")
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
@@ -62,25 +62,96 @@ class BatchService:
         db.add(new_job)
         await db.commit()
         await db.refresh(new_job)
-
-        # Lazy Import to prevent circular dependency
-        from worker import run_batch_analysis_task 
         
-        # --- PRIORITY QUEUE LOGIC ---
-        # Map JobPriority enum to Celery queue names
-        queue_name = "normal"
-        if priority == JobPriority.HIGH:
-            queue_name = "high"
-        elif priority == JobPriority.LOW:
-            queue_name = "low"
-        
-        run_batch_analysis_task.apply_async(
-            args=[job_id, file_path, column_mapping, user_id, dry_run],
-            task_id=job_id,
-            queue=queue_name  # Send to specific priority queue
-        )
+        return new_job, file_path
 
-        return new_job
+    async def process_job_background(
+        self, 
+        job_id: str, 
+        file_path: str, 
+        column_mapping: Optional[Dict[str, str]], 
+        dry_run: bool
+    ):
+        """
+        Background task logic: updates status, runs analysis, saves CSV.
+        Replaces the old Celery worker logic.
+        """
+        async def on_progress(completed, total):
+            # Update DB every 10 rows or at finish
+            if completed % 10 == 0 or completed == total:
+                async with SessionLocal() as db:
+                    job = await db.get(BatchJob, job_id)
+                    # Stop updating if cancelled
+                    if job and job.status != JobStatus.CANCELLED:
+                        job.completed_rows = completed
+                        job.total_rows = total
+                        db.add(job)
+                        await db.commit()
+
+        async with SessionLocal() as db:
+            try:
+                # 1. Start Processing
+                job = await db.get(BatchJob, job_id)
+                if not job or job.status == JobStatus.CANCELLED:
+                    return
+
+                job.status = JobStatus.PROCESSING
+                job.started_at = datetime.utcnow()
+                db.add(job)
+                await db.commit()
+
+                # 2. Run Analysis
+                result = await self.analyze_file(
+                    file_path=file_path,
+                    db=db,
+                    job_id=job_id,
+                    column_mapping=column_mapping,
+                    dry_run=dry_run,
+                    progress_callback=on_progress
+                )
+
+                # 3. Check Cancellation before saving
+                await db.refresh(job)
+                if job.status == JobStatus.CANCELLED:
+                    return
+
+                # 4. Save Results to CSV
+                flattened = self.flatten_analysis_results(result["results"])
+                df = pd.DataFrame(flattened)
+                
+                output_dir = "/tmp/exports"
+                os.makedirs(output_dir, exist_ok=True)
+                output_path = f"{output_dir}/results_{job_id}.csv"
+                df.to_csv(output_path, index=False)
+
+                # 5. Complete Job
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.utcnow()
+                job.completed_rows = len(flattened)
+                job.total_rows = len(flattened)
+                job.result_url = output_path
+                db.add(job)
+                await db.commit()
+
+            except Exception as e:
+                batch_logger.error(f"Job {job_id} failed: {e}")
+                # Rollback and mark failed
+                await db.rollback()
+                async with SessionLocal() as err_db:
+                    job = await err_db.get(BatchJob, job_id)
+                    if job and job.status != JobStatus.CANCELLED:
+                        job.status = JobStatus.FAILED
+                        job.error_message = f"Processing Error: {str(e)}"
+                        job.completed_at = datetime.utcnow()
+                        err_db.add(job)
+                        await err_db.commit()
+            finally:
+                # Cleanup input file
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except:
+                        pass
 
     async def _fetch_gids_bulk(self, points: List[Tuple[int, float, float]], db: AsyncSession) -> Dict[int, int]:
         results: Dict[int, int] = {}
@@ -164,6 +235,9 @@ class BatchService:
                     if not gid:
                         result_data["error"] = "No parcel found"
                     else:
+                        # Note: We create a new session per row or share one?
+                        # Sharing 'db' passed in is unsafe if concurrency is high and asyncpg driver limits.
+                        # Using SessionLocal() per row is safer for concurrent gathered tasks.
                         async with SessionLocal() as session:
                             res = await self.analysis_service.get_analysis(
                                 gid=gid, 

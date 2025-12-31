@@ -38,8 +38,8 @@ class ImageService:
     """
 
     def __init__(self):
-        self.s3_bucket = "radcorp-images"
-        self.s3_region = "us-east-2"
+        self.s3_bucket = "radcorp-images11"
+        self.s3_region = "eu-north-1"
         self.s3_base_url = f"https://{self.s3_bucket}.s3.{self.s3_region}.amazonaws.com"
         self.dem_path = os.environ.get("ELEVATION_FILE", "/mnt/land200/gis-data/tx_terrain/Texas_DEM.vrt")
         self.tree_path = os.environ.get("TREE_COVERAGE_PATH", "/mnt/land200/gis-data/tx_treecoverage")
@@ -73,10 +73,7 @@ class ImageService:
         generate_func: callable, 
         geom_input: Optional[str] = None
     ) -> Union[str, Dict[str, Any]]:
-        
         s3_key = self._get_s3_key(gid, folder_name, geom_input)
-        
-        # 1. If NO geometry input is provided, rely on cache.
         if not geom_input and gid:
             try:
                 self.s3.head_object(Bucket=self.s3_bucket, Key=s3_key)
@@ -84,15 +81,9 @@ class ImageService:
             except ClientError as e:
                 if e.response['Error']['Code'] != "404":
                     raise
-
-        # 2. Generate Image (or get No Data dict)
         result = await generate_func(session, gid, geom_input)
-        
-        # 3. If No Data (Dict returned), stop here.
         if isinstance(result, dict):
             return result
-            
-        # 4. Upload to S3 (result is BytesIO)
         self.s3.upload_fileobj(
             result, 
             self.s3_bucket, 
@@ -179,44 +170,28 @@ class ImageService:
         3. Returns BytesIO directly (no disk read).
         """
         pool = WebDriverPool.get_instance()
-        
-        # Convert Folium map to HTML string in memory
         html_content = m.get_root().render()
-        # Encode to Base64 to pass as Data URI
         b64_html = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
         data_uri = f"data:text/html;base64,{b64_html}"
 
         async with pool.acquire() as driver:
-            # Run blocking Selenium operations in a thread to avoid blocking the Event Loop
             def _blocking_selenium_logic(d):
                 d.set_window_size(800, 600)
                 d.get(data_uri)
-                
-                # Wait briefly for tiles. Since we use 'eager' strategy in pool, explicit wait is safer.
-                # Leaflet maps usually have a 'leaflet-container' class.
                 WebDriverWait(d, 5).until(
                     EC.presence_of_element_located((By.CLASS_NAME, "leaflet-container"))
                 )
-                
-                # Optional: tiny sleep to allow tiles to fully paint if needed
-                # time.sleep(0.2) 
-                
+                time.sleep(3) 
+
                 return d.get_screenshot_as_png()
 
             png_bytes = await asyncio.to_thread(_blocking_selenium_logic, driver)
-
-            # Process image in memory
             with Image.open(BytesIO(png_bytes)) as img:
                 img = img.convert("RGB")
                 buf = BytesIO()
                 img.save(buf, format="PNG", optimize=True)
                 buf.seek(0)
                 return buf
-
-    # =========================================================================
-    # Public Methods
-    # =========================================================================
-
     async def get_parcel_image(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Union[str, Dict]:
         return await self._handle_cache_or_generate(session, gid, "aerial", self._gen_parcel, geom)
 
@@ -240,11 +215,6 @@ class ImageService:
 
     async def get_electric_image(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Union[str, Dict]:
         return await self._handle_cache_or_generate(session, gid, "electric_lines", self._gen_electric, geom)
-
-    # =========================================================================
-    # Generators
-    # =========================================================================
-
     async def _gen_parcel(self, session: AsyncSession, gid: Optional[int], geom: Optional[str] = None) -> BytesIO:
         shapely_geom, bounds, _ = await self._get_geometry_and_bounds(session, gid, geom)
         m = self._create_base_map(bounds)

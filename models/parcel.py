@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 class ParcelResponse(BaseModel):
-    gid: str
+    gid: int
     prop_id: str
     geo_id: Optional[str] = None
     owner_name: Optional[str] = None
