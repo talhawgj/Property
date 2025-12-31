@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "land-valuation-api",
       script: "/home/devuser/Parcel/venv/bin/python",
-      args: "-m uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1",
+      args: "-m uvicorn main:app --host 0.0.0.0 --port 8001s --workers 1",
       cwd: "/home/devuser/Parcel/Property",
       interpreter: "none",
       env: {
