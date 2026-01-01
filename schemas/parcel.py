@@ -27,8 +27,6 @@ class AnalysisResult(SQLModel, table=True):
     __tablename__ = "analysis_results"
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-
-    # Use sa_column to preserve specific ForeignKey behavior like 'ondelete="CASCADE"'
     parcel_gid: int = Field(
         sa_column=Column(
             Integer, 
@@ -41,7 +39,7 @@ class AnalysisResult(SQLModel, table=True):
     processing_mode: str = Field(default="single")
     csv_source_data: Optional[Dict[str, Any]] = Field(
         default=None,
-        sa_column=Column(JSONB, nullable=True) # separate column for CSV context
+        sa_column=Column(JSONB, nullable=True)
     )
     result_data: Dict[str, Any] = Field(
         default={},
@@ -51,7 +49,6 @@ class AnalysisResult(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
-
     updated_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(

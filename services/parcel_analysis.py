@@ -5,7 +5,6 @@ import time
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, Literal, Optional,  Tuple, Callable
 from decimal import Decimal
-
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import text
 from sqlalchemy import select
