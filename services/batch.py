@@ -5,7 +5,7 @@ import pandas as pd
 import uuid
 from io import BytesIO
 from typing import Any, Dict, List, Tuple, Optional, Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import UploadFile
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,7 @@ batch_logger = logging.getLogger("batch_analysis")
 
 class BatchService:
     _instance: Optional["BatchService"] = None
-    analysis_service: Optional[AnalysisService] = AnalysisService()
+    analysis_service: Optional[AnalysisService]
 
     def __new__(cls) -> "BatchService":
         if cls._instance is None:
@@ -88,7 +88,8 @@ class BatchService:
         job_id = uuid.uuid4().hex
         temp_dir = os.getenv("UPLOAD_DIR", "/tmp/uploads")
         os.makedirs(temp_dir, exist_ok=True)
-        file_path = os.path.join(temp_dir, f"{job_id}_{file.filename}")
+        filename = file.filename or "upload"
+        file_path = os.path.join(temp_dir, f"{job_id}_{filename}")
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
@@ -97,7 +98,7 @@ class BatchService:
             job_id=job_id,
             user_id=user_id,
             username=username,
-            filename=file.filename,
+            filename=filename,
             status=JobStatus.QUEUED,
             priority=priority,
             created_at=datetime.now(),
@@ -281,9 +282,7 @@ class BatchService:
         tasks = [asyncio.create_task(_process_row(i, row.to_dict())) for i, row in df.iterrows()]
         results = await asyncio.gather(*tasks)
         results = [r for r in results if r is not None]
-
         return {"results": results, "batch_id": job_id}
-
     def flatten_analysis_results(self, results: List[Dict]) -> List[Dict]:
         flattened = []
         for row in results:

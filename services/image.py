@@ -6,7 +6,6 @@ import uuid
 import hashlib
 import base64
 import asyncio
-from pathlib import Path
 from io import BytesIO
 from typing import Dict, Optional, Union, Tuple, List, Any
 import boto3
@@ -15,8 +14,6 @@ import rasterio
 from rasterio.mask import mask
 from PIL import Image
 import folium
-from folium import GeoJson
-from folium.features import DivIcon
 import geopandas as gpd
 from shapely.geometry import shape, mapping
 from shapely import wkt
@@ -64,15 +61,7 @@ class ImageService:
             return f"temp/{folder_name}/{geom_hash}.png"
         else:
             return f"temp/{folder_name}/{uuid.uuid4().hex}.png"
-
-    async def _handle_cache_or_generate(
-        self, 
-        session: AsyncSession,
-        gid: Optional[int], 
-        folder_name: str, 
-        generate_func: callable, 
-        geom_input: Optional[str] = None
-    ) -> Union[str, Dict[str, Any]]:
+    async def _handle_cache_or_generate( self, session: AsyncSession,gid: Optional[int], folder_name: str, generate_func: callable, geom_input: Optional[str] = None) -> Union[str, Dict[str, Any]]:
         s3_key = self._get_s3_key(gid, folder_name, geom_input)
         if not geom_input and gid:
             try:
@@ -93,15 +82,9 @@ class ImageService:
         
         return f"{self.s3_base_url}/{s3_key}"
 
-    async def _get_geometry_and_bounds(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom_input: Optional[str] = None
-    ) -> Tuple[Any, List[float], int]:
+    async def _get_geometry_and_bounds( self, session: AsyncSession, gid: Optional[int] = None, geom_input: Optional[str] = None) -> Tuple[Any, List[float], int]:
         shapely_geom = None
         srid = 4326
-
         if geom_input:
             try:
                 input_str = geom_input.strip()
@@ -173,7 +156,6 @@ class ImageService:
         html_content = m.get_root().render()
         b64_html = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
         data_uri = f"data:text/html;base64,{b64_html}"
-
         async with pool.acquire() as driver:
             def _blocking_selenium_logic(d):
                 d.set_window_size(800, 600)
@@ -182,9 +164,7 @@ class ImageService:
                     EC.presence_of_element_located((By.CLASS_NAME, "leaflet-container"))
                 )
                 time.sleep(3) 
-
                 return d.get_screenshot_as_png()
-
             png_bytes = await asyncio.to_thread(_blocking_selenium_logic, driver)
             with Image.open(BytesIO(png_bytes)) as img:
                 img = img.convert("RGB")
@@ -224,11 +204,9 @@ class ImageService:
         ).add_to(m)
         self._add_legend(m, ["<svg width='16' height='16' style='vertical-align:middle;margin-right:6px;'><polygon points='2,2 14,2 14,14 2,14' style='fill:none;stroke:red;stroke-width:2'/></svg> Property Boundary"])
         return await self._render_and_screenshot(m, str(gid) if gid else "geom")
-
+    
     async def _gen_road(self, session: AsyncSession, gid: Optional[int], geom: Optional[str] = None) -> Union[BytesIO, Dict]:
         shapely_geom, bounds, _ = await self._get_geometry_and_bounds(session, gid, geom)
-        
-        # Check if roads exist near property
         wkt_str = shapely_geom.wkt
         sql = text("""
             SELECT ST_AsGeoJSON(ST_Transform(wkb_geometry, 4326)) FROM public.frontage_analysis_roads
@@ -297,28 +275,22 @@ class ImageService:
 
     async def _gen_electric(self, session: AsyncSession, gid: Optional[int], geom: Optional[str] = None) -> Union[BytesIO, Dict]:
         shapely_geom, bounds, _ = await self._get_geometry_and_bounds(session, gid, geom)
-        
         sql = text("SELECT ST_AsGeoJSON(ST_Transform(geom, 4326)) FROM electric_transmission_lines WHERE ST_Intersects(geom, ST_SetSRID(ST_GeomFromText(:wkt, 4326), 4326))")
         res = await session.execute(sql, {"wkt": shapely_geom.wkt})
         rows = res.fetchall()
-
         if not rows:
             return {"message": "No electric transmission lines detected.", "status": "no_data"}
-
         m = self._create_base_map(bounds)
         for row in rows:
             folium.GeoJson(gpd.GeoDataFrame(geometry=[shape(json.loads(row[0]))], crs="EPSG:4326"), style_function=lambda x: {'color': 'yellow', 'weight': 3}).add_to(m)
-        
         folium.GeoJson(gpd.GeoDataFrame(geometry=[shapely_geom], crs="EPSG:4326"), style_function=lambda x: {'color': 'red', 'weight': 3, 'fillOpacity': 0}).add_to(m)
         self._add_legend(m, ["<svg width='16' height='16' style='vertical-align:middle;margin-right:6px;'><polygon points='2,2 14,2 14,14 2,14' style='fill:none;stroke:red;stroke-width:2'/></svg> Property Boundary", "<svg width='16' height='16' style='vertical-align:middle;margin-right:6px;'><line x1='2' y1='8' x2='14' y2='8' style='stroke:yellow;stroke-width:3'/></svg> Electric Line"])
         return await self._render_and_screenshot(m, str(gid) if gid else "geom")
-
+    
     async def _gen_tree(self, session: AsyncSession, gid: Optional[int], geom: Optional[str] = None) -> Union[BytesIO, Dict]:
         shapely_geom, bounds, _ = await self._get_geometry_and_bounds(session, gid, geom)
-        
         has_trees = False
         m = self._create_base_map(bounds)
-        
         if os.path.exists(self.tree_path):
             try:
                 gdf = gpd.GeoDataFrame(geometry=[shapely_geom], crs="EPSG:4326").to_crs(epsg=3857)
@@ -337,8 +309,6 @@ class ImageService:
                                         mask_arr = data > 1
                                         rgba = np.zeros((mask_arr.shape[0], mask_arr.shape[1], 4), dtype=np.uint8)
                                         rgba[mask_arr] = [0, 100, 0, 153]
-                                        
-                                        # Convert overlay to base64 for embedding (Avoid disk write here too)
                                         img_buf = BytesIO()
                                         Image.fromarray(rgba).save(img_buf, format='PNG')
                                         img_b64 = base64.b64encode(img_buf.getvalue()).decode('utf-8')
@@ -380,7 +350,6 @@ class ImageService:
 
     async def _gen_water(self, session: AsyncSession, gid: Optional[int], geom: Optional[str] = None) -> Union[BytesIO, Dict]:
         shapely_geom, bounds, _ = await self._get_geometry_and_bounds(session, gid, geom)
-        
         has_water = False
         m = self._create_base_map(bounds)
         
@@ -392,10 +361,8 @@ class ImageService:
                 has_water = True
                 for row in rows:
                     folium.GeoJson(gpd.GeoDataFrame(geometry=[shape(json.loads(row[0]))], crs="EPSG:4326"), style_function=lambda x, c=style['c']: {'color': c, 'fillColor': c, 'fillOpacity': 0.5, 'weight': 2}).add_to(m)
-
         if not has_water:
             return {"message": "No water features detected.", "status": "no_data"}
-
         folium.GeoJson(gpd.GeoDataFrame(geometry=[shapely_geom], crs="EPSG:4326"), style_function=lambda x: {'color': 'red', 'weight': 3, 'fillOpacity': 0}).add_to(m)
         self._add_legend(m, ["<svg width='16' height='16' style='vertical-align:middle;margin-right:6px;'><polygon points='2,2 14,2 14,14 2,14' style='fill:none;stroke:red;stroke-width:2'/></svg> Property Boundary", "<span style='color:blue;'>■</span> Water Features"])
         return await self._render_and_screenshot(m, str(gid) if gid else "geom")

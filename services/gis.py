@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-import math
 import numpy as np
 import rasterio
 from rasterio.mask import mask
@@ -10,9 +9,6 @@ from shapely import wkt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import text
 from typing import Dict, Any, Optional, Tuple
-import ee
-from config import config
-
 logger = logging.getLogger(__name__)
 
 class GISAnalysisService:
@@ -20,16 +16,10 @@ class GISAnalysisService:
     Centralized, optimized service for all GIS analysis (Vector & Raster).
     Capable of analyzing based on Database GID OR Raw Geometry input.
     """
-
     def __init__(self):
         self.dem_path = os.environ.get("ELEVATION_FILE", "/mnt/land200/gis-data/tx_terrain/Texas_DEM.vrt")
         self.tree_path = os.environ.get("TREE_COVERAGE_PATH", "/mnt/land200/gis-data/tx_treecoverage")
-    async def _get_target_geometry(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom_input: Optional[str] = None
-    ) -> Tuple[str, Any]:
+    async def _get_target_geometry(self, session: AsyncSession, gid: Optional[int] = None, geom_input: Optional[str] = None) -> Tuple[str, Any]:
         """
         Internal Helper: Resolves the target geometry to WKT and Shapely object.
         
@@ -158,21 +148,18 @@ class GISAnalysisService:
             "count": len(lines),
             "details": lines
         }
-    
     async def analyze_road_frontage(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Calculates road frontage in feet.
-        Returns a list containing a single result dict to satisfy BatchService's iteration logic.
-        """
         target_wkt, _ = await self._get_target_geometry(session, gid, geom)
         sql = text("""
             WITH parcel_geom_tab AS (
-                SELECT ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt), 4326), 3083) as geom
+                SELECT ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt), 4326), 3083) as geom,
+                       ST_SetSRID(ST_GeomFromText(:wkt), 4326) as geom_4326
             ),
             nearby_roads AS (
                 SELECT ST_Transform(wkb_geometry, 3083) as geom
                 FROM frontage_analysis_roads, parcel_geom_tab p
-                WHERE ST_DWithin(ST_Transform(wkb_geometry, 3083), p.geom, 25)
+                WHERE ST_DWithin(wkb_geometry, p.geom_4326, 0.0005)
+                AND ST_DWithin(ST_Transform(wkb_geometry, 3083), p.geom, 25)
             ),
             merged_roads AS (
                 SELECT ST_Union(geom) as geom FROM nearby_roads
@@ -212,7 +199,7 @@ class GISAnalysisService:
                 "raw_boundary_feet": round(raw_frontage, 2)
             }
         except Exception as e:
-            logger.error(f"Road frontage analysis failed      : {e}")
+            logger.error(f"Road frontage analysis failed: {repr(e)}") 
             return {}
     async def analyze_buildable_area(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -292,41 +279,6 @@ class GISAnalysisService:
         except Exception as e:
             logger.error(f"Elevation analysis failed: {e}")
             return {"error": str(e)}
-    
-        """
-        Calculates Slope using Google Earth Engine (USGS 3DEP).
-        """
-        _, shapely_geom = await self._get_target_geometry(session, gid, geom)
-        try:
-            geojson = mapping(shapely_geom)
-            ee_geom = ee.Geometry(geojson)
-
-            dem = ee.Image("USGS/3DEP/10m")
-            slope_img = ee.Terrain.slope(dem).clip(ee_geom)
-            
-            # Reduce region to get mean and max
-            stats = slope_img.reduceRegion(
-                reducer=ee.Reducer.mean().combine(ee.Reducer.max(), sharedInputs=True),
-                geometry=ee_geom,
-                scale=10,
-                maxPixels=1e9
-            ).getInfo()
-
-            mean_deg = stats.get('slope_mean', 0)
-            max_deg = stats.get('slope_max', 0)
-
-            def deg_to_pct(d): 
-                return round(math.tan(math.radians(d)) * 100, 2)
-
-            return {
-                "mean_slope_degrees": round(mean_deg, 2),
-                "mean_slope_percentage": deg_to_pct(mean_deg),
-                "max_slope_degrees": round(max_deg, 2),
-                "max_slope_percentage": deg_to_pct(max_deg)
-            }
-        except Exception as e:
-            logger.error(f"Slope analysis failed: {e}")
-            return {"error": f"Slope analysis failed: {str(e)}"}
     async def analyze_tree_coverage(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Calculates tree coverage percentage using local COG files.

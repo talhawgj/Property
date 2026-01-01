@@ -1,16 +1,14 @@
 import os
 import json
 import logging
-from typing import List, Optional, Dict, Any
 from datetime import datetime
-
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
-
 from db import get_session 
-from models.job import BatchJob, JobStatus, JobPriority
+from models import BatchJob, JobStatus, JobPriority
 from services import batch_service
 
 logger = logging.getLogger(__name__)

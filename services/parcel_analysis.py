@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 from logging.handlers import RotatingFileHandler
-from typing import Any, Dict, Literal, Optional, List, Tuple, Callable
+from typing import Any, Dict, Literal, Optional,  Tuple, Callable
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
