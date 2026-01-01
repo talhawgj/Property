@@ -160,15 +160,11 @@ class GISAnalysisService:
         }
     
     async def analyze_road_frontage(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
-    
         """
         Calculates road frontage in feet.
         Returns a list containing a single result dict to satisfy BatchService's iteration logic.
         """
-        # 1. Get the geometry (Assuming this method exists in your class)
         target_wkt, _ = await self._get_target_geometry(session, gid, geom)
-
-        # 2. SQL Query (Cleaned up indentation)
         sql = text("""
             WITH parcel_geom_tab AS (
                 SELECT ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt), 4326), 3083) as geom
@@ -201,16 +197,12 @@ class GISAnalysisService:
                 (SELECT COUNT(*) FROM nearby_roads) as access_count
             FROM raw_frontage rf, interior_roads ir
         """)
-
         try:
             res = await session.execute(sql, {"wkt": target_wkt})
             row = res.fetchone()
-            
             raw_frontage = float(row[0]) if row else 0.0
             interior_len = float(row[1]) if row else 0.0
             access_count = row[2] if row else 0
-            
-            # Calculate final adjusted frontage
             adjusted_frontage = max(raw_frontage - interior_len, 0.0)
             return {
                 "length_ft": round(adjusted_frontage, 2),
@@ -219,10 +211,8 @@ class GISAnalysisService:
                 "road_access_count": access_count,
                 "raw_boundary_feet": round(raw_frontage, 2)
             }
-
         except Exception as e:
-            logger.error(f"Road frontage analysis failed: {e}")
-            # Return empty list on error so the sum() in BatchService results in 0 instead of crashing
+            logger.error(f"Road frontage analysis failed      : {e}")
             return {}
     async def analyze_buildable_area(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """

@@ -4,7 +4,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
@@ -18,10 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Batch Analysis"])
 
 @router.get("/analyze/{gid}", response_model=Optional[Dict[str, Any]])
-async def parcel_analysis(
-    gid: int,
-    db: AsyncSession = Depends(get_session)
-) -> Optional[Dict[str, Any]]:
+async def parcel_analysis(gid: int,db: AsyncSession = Depends(get_session)) -> Optional[Dict[str, Any]]:
     """
     Analyze a single parcel immediately (synchronous).
     """
@@ -30,18 +27,11 @@ async def parcel_analysis(
     return result
 
 @router.post("/analyze/batch", response_model=BatchJob)
-async def submit_batch_job(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    column_mapping: Optional[str] = Form(None, description='JSON string e.g. {"Lat": "PropertyLatitude"}'),
-    priority: JobPriority = Form(JobPriority.NORMAL),
-    dry_run: bool = Form(False),
-    user_id: str = Form("system"),
-    username: str = Form("system"),
-    db: AsyncSession = Depends(get_session)
-):
+async def submit_batch_job(file: UploadFile = File(...),column_mapping: Optional[str] = Form(None, description='JSON string e.g. {"Lat": "PropertyLatitude"}'),priority: JobPriority = Form(JobPriority.NORMAL),
+                            dry_run: bool = Form(False), user_id: str = Form("system"),username: str = Form("system"), db: AsyncSession = Depends(get_session)):
     """
-    Uploads file -> Creates Job (Queued) -> Starts Background Task.
+    Uploads file -> Creates Job (Queued).
+    The System Scheduler (running in main.py) will pick this up automatically.
     """
     if not file.filename or not file.filename.lower().endswith(('.csv', '.xls', '.xlsx')):
         raise HTTPException(status_code=400, detail="Invalid file type. Only CSV or Excel allowed.")
@@ -54,24 +44,17 @@ async def submit_batch_job(
             raise HTTPException(status_code=400, detail="Invalid JSON format for column_mapping")
 
     try:
-        # 1. Save file and create DB entry
-        new_job, file_path = await batch_service.create_job_with_file(
+        new_job = await batch_service.create_job_with_file(
             file=file,
             db=db,
             user_id=user_id,
             username=username,
-            priority=priority
-        )
-
-        # 2. Add to BackgroundTasks (FastAPI will run this after response is sent)
-        background_tasks.add_task(
-            batch_service.process_job_background,
-            job_id=new_job.job_id,
-            file_path=file_path,
+            priority=priority,
             column_mapping=mapping_dict,
             dry_run=dry_run
         )
-
+        
+        logger.info(f"Job {new_job.job_id} submitted to queue.")
         return new_job
 
     except Exception as e:
@@ -84,7 +67,7 @@ async def cancel_job(
     db: AsyncSession = Depends(get_session)
 ):
     """
-    Cancels a job. The background task checks DB status and will stop if it sees CANCELLED.
+    Cancels a job. The worker checks this status during processing and aborts.
     """
     job = await db.get(BatchJob, job_id)
     if not job:
@@ -123,6 +106,7 @@ async def get_job_progress(
         "progress": {
             "current": job.completed_rows,
             "total": job.total_rows,
+            "failed": job.failed_rows, # Added visibility into failures
             "percent": percent
         },
         "error": job.error_message,

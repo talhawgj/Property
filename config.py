@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     CHECKOUT_CANCEL_URL: str | None = None
     PORTAL_RETURN_URL: str | None = None
     DASHBOARD_API_URL: str | None = None
+    BATCH_CONCURRENCY: int = 10
     model_config = SettingsConfigDict(env_file=".env",extra='ignore')
 
 config = Settings()

@@ -4,12 +4,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse, PlainTextResponse
 from routes import water_router, parcel_router, gis_router,image_router, analysis_router, stripe_router, stripe_billing_router,require_api_token
-from redis import asyncio as aioredis
 from utils.webdriver_pool import WebDriverPool
+from services.batch import BatchService
 from db import init_db
 from config import config
 import logging
+import asyncio
 import sys
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -29,14 +31,12 @@ def verify_api_key(x_api_key: str = Header(...)):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    redis = aioredis.from_url("redis://localhost:6379", encoding="utf-8", decode_responses=True)
-    app.state.redis = redis
-    await WebDriverPool().initialize()  # Initialize the WebDriver pool
+    await WebDriverPool().initialize()  
     await init_db()
+    asyncio.create_task(BatchService().recover_stuck_jobs())
+    asyncio.create_task(BatchService().run_job_scheduler())  
     yield
-    await redis.close()
-    await WebDriverPool()._close_drivers()  # Close the WebDriver pool
-
+    await WebDriverPool()._close_drivers()
 app = FastAPI(
     title="Land Valuation API",
     description="API for land valuation",
@@ -67,17 +67,4 @@ app.include_router(analysis_router)
 app.include_router(stripe_router, prefix="/api", tags=["stripe-webhook"])
 app.include_router(stripe_billing_router, prefix="/api", tags=["stripe-billing"])
 
-
-# [
-#   {
-#     "gid": 11028,
-#     "prop_id": "22499",
-#     "geo_id": "R0022499",
-#     "owner_name": "WOODY JACKSON D",
-#     "situs_addr": "2669  ACR 182 , ,",
-#     "county": "ANDERSON",
-#     "acreage": null,
-#     "image_url": "https://radcorp-images.s3.us-east-2.amazonaws.com/parcels/11028/aerial_11028.png"
-#   }
-# expose legacy name for uvicorn
 main = app

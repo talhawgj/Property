@@ -1,7 +1,8 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, Dict, Any
 from sqlmodel import SQLModel, Field
+from sqlalchemy import JSON, Column
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
@@ -9,18 +10,23 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
 class JobPriority(str, Enum):
     LOW = "low"
     NORMAL = "normal"
     HIGH = "high"
+
 class BatchJob(SQLModel, table=True):
     __tablename__ = "batch_jobs"
     job_id: str = Field(primary_key=True, index=True)
     user_id: str = Field(index=True)
     username: str
     filename: str
+    file_path: Optional[str] = None
     status: JobStatus = Field(default=JobStatus.QUEUED, index=True)
     priority: JobPriority = Field(default=JobPriority.NORMAL)
+    dry_run: bool = Field(default=False)
+    column_mapping: Optional[Dict[str, Any]] = Field(default={}, sa_column=Column(JSON))
     total_rows: int = 0
     completed_rows: int = 0
     failed_rows: int = 0
