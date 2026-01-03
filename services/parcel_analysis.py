@@ -169,7 +169,6 @@ class AnalysisService:
                         existing.result_data = data
                         if csv_context:
                             existing.csv_source_data = csv_context
-                        
                         db.add(existing)
                         await db.commit()
                     return data

@@ -66,6 +66,7 @@ class BatchService:
                             .where(BatchJob.status == JobStatus.QUEUED)
                             .order_by(BatchJob.created_at.asc()) 
                             .limit(slots)
+                            .with_for_update(skip_locked=True)
                         )
                         result = await db.execute(query)
                         jobs_to_run = result.scalars().all()
@@ -86,10 +87,11 @@ class BatchService:
         Saves file and creates a QUEUED job record.
         """
         job_id = uuid.uuid4().hex
-        temp_dir = os.getenv("UPLOAD_DIR", "/tmp/uploads")
+        temp_dir = config.UPLOAD_DIR if hasattr(config, 'UPLOAD_DIR') else "./uploads"
         os.makedirs(temp_dir, exist_ok=True)
         filename = file.filename or "upload"
-        file_path = os.path.join(temp_dir, f"{job_id}_{filename}")
+        relative_path = os.path.join(temp_dir, f"{job_id}_{filename}")
+        file_path = os.path.abspath(relative_path)    
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)

@@ -148,18 +148,22 @@ class GISAnalysisService:
             "count": len(lines),
             "details": lines
         }
+    
     async def analyze_road_frontage(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
+    
         target_wkt, _ = await self._get_target_geometry(session, gid, geom)
+        
         sql = text("""
             WITH parcel_geom_tab AS (
-                SELECT ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt), 4326), 3083) as geom,
-                       ST_SetSRID(ST_GeomFromText(:wkt), 4326) as geom_4326
+                -- Transform input WKT (assumed 4326) to 3083 for metric analysis
+                SELECT ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt), 4326), 3083) as geom
             ),
             nearby_roads AS (
-                SELECT ST_Transform(wkb_geometry, 3083) as geom
-                FROM frontage_analysis_roads, parcel_geom_tab p
-                WHERE ST_DWithin(wkb_geometry, p.geom_4326, 0.0005)
-                AND ST_DWithin(ST_Transform(wkb_geometry, 3083), p.geom, 25)
+                -- Select directly from osm_roads using the pre-projected geom_3083 column
+                SELECT geom_3083 as geom
+                FROM osm_roads, parcel_geom_tab p
+                -- Use the metric index directly (faster and more accurate than the previous degree mix)
+                WHERE ST_DWithin(geom_3083, p.geom, 25)
             ),
             merged_roads AS (
                 SELECT ST_Union(geom) as geom FROM nearby_roads
@@ -168,6 +172,7 @@ class GISAnalysisService:
                 SELECT 
                     CASE 
                         WHEN mr.geom IS NULL THEN 0
+                        -- Calculate intersection of parcel boundary with 25m buffered road
                         ELSE ST_Length(ST_Intersection(ST_Boundary(p.geom), ST_Buffer(mr.geom, 25))) 
                     END as len_m
                 FROM parcel_geom_tab p
@@ -184,13 +189,16 @@ class GISAnalysisService:
                 (SELECT COUNT(*) FROM nearby_roads) as access_count
             FROM raw_frontage rf, interior_roads ir
         """)
+
         try:
             res = await session.execute(sql, {"wkt": target_wkt})
             row = res.fetchone()
+            
             raw_frontage = float(row[0]) if row else 0.0
             interior_len = float(row[1]) if row else 0.0
             access_count = row[2] if row else 0
             adjusted_frontage = max(raw_frontage - interior_len, 0.0)
+            
             return {
                 "length_ft": round(adjusted_frontage, 2),
                 "intersects": adjusted_frontage > 0,
@@ -200,7 +208,7 @@ class GISAnalysisService:
             }
         except Exception as e:
             logger.error(f"Road frontage analysis failed: {repr(e)}") 
-            return {}
+            return {}  
     async def analyze_buildable_area(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Calculates buildable area by subtracting Flood Zones and Wetlands from Total Area.

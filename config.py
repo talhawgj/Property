@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     PORTAL_RETURN_URL: str | None = None
     DASHBOARD_API_URL: str | None = None
     BATCH_CONCURRENCY: int = 10
+    UPLOAD_DIR: str = "./uploads"
     model_config = SettingsConfigDict(env_file=".env",extra='ignore')
 
 config = Settings()

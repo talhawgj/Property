@@ -209,9 +209,13 @@ class ImageService:
         shapely_geom, bounds, _ = await self._get_geometry_and_bounds(session, gid, geom)
         wkt_str = shapely_geom.wkt
         sql = text("""
-            SELECT ST_AsGeoJSON(ST_Transform(wkb_geometry, 4326)) FROM public.frontage_analysis_roads
-            WHERE ST_DWithin(ST_Transform(wkb_geometry, 3857), ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt, 4326), 4326), 3857), 50)
-        """)
+            SELECT ST_AsGeoJSON(geom) 
+        FROM public.osm_roads
+        WHERE ST_DWithin(
+            geom_3083, 
+            ST_Transform(ST_SetSRID(ST_GeomFromText(:wkt), 4326), 3083), 
+            50
+        )        """)
         result = await session.execute(sql, {"wkt": wkt_str})
         rows = result.fetchall()
 
