@@ -84,6 +84,38 @@ class PropertyCatalogueService:
         await db.commit()
         return str(gid)
 
+    async def list_properties(
+        self, 
+        db: AsyncSession,
+        limit: int = 50,
+        offset: int = 0,
+        desc_order: bool = True
+    ) -> PropertySearchResponse:
+        """List all properties with optional pagination and ordering."""
+        query = select(AnalysisResult)
+        
+        # Count total
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await db.execute(count_query)).scalar_one()
+        
+        # Apply ordering
+        if desc_order:
+            query = query.order_by(desc(AnalysisResult.updated_at))
+        else:
+            query = query.order_by(AnalysisResult.updated_at)
+        
+        # Apply pagination
+        query = query.limit(limit).offset(offset)
+        rows = (await db.execute(query)).scalars().all()
+
+        return PropertySearchResponse(
+            properties=[self._map_db_to_response(row) for row in rows],
+            total=total,
+            limit=limit,
+            offset=offset,
+            has_more=(total > offset + limit)
+        )
+
     async def search_properties(
         self, 
         db: AsyncSession, 

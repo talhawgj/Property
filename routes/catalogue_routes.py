@@ -31,6 +31,16 @@ async def create_property(
         logger.error(f"Create failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@router.get("/properties", response_model=PropertySearchResponse)
+async def list_properties(
+    limit: int = Query(50, le=1000),
+    offset: int = Query(0, ge=0),
+    desc: bool = Query(True),
+    db: AsyncSession = Depends(get_session)
+):
+    """List all properties with pagination"""
+    return await service.list_properties(db, limit, offset, desc)
+
 @router.get("/search", response_model=PropertySearchResponse)
 async def search_properties(
     status: Optional[str] = Query(None),
