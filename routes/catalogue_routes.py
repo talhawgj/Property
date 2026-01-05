@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query, Depends
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 from db import get_session
@@ -31,15 +31,23 @@ async def create_property(
         logger.error(f"Create failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-@router.get("/properties", response_model=PropertySearchResponse)
+@router.get("/properties", response_model=List[PropertyResponse])
 async def list_properties(
-    limit: int = Query(50, le=1000),
-    offset: int = Query(0, ge=0),
-    desc: bool = Query(True),
+    limit: int = Query(500, ge=1, le=10000, description="Maximum results to return (default 500)"),
+    offset: int = Query(0, ge=0, description="Number of results to skip for pagination"),
+    order_by: str = Query("updated_at", description="Field to order by"),
+    desc: bool = Query(True, description="Descending order if True"),
     db: AsyncSession = Depends(get_session)
 ):
-    """List all properties with pagination"""
-    return await service.list_properties(db, limit, offset, desc)
+    """List all properties with pagination and ordering."""
+    try:
+        properties = await service.list_all_properties(
+            db=db, limit=limit, offset=offset, order_by=order_by, desc=desc
+        )
+        return properties
+    except Exception as e:
+        logger.error(f"Error listing properties: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/search", response_model=PropertySearchResponse)
 async def search_properties(
