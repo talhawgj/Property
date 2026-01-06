@@ -7,7 +7,8 @@ from .stripe_webhook import router as stripe_router
 from .guards import require_api_token
 from .stripe_billing import router as stripe_billing_router
 from .catalogue_routes import router as catalogue_router
+from .scrub_routes import router as scrub_router
 
 __all__ = ['water_router', 'parcel_router', 'gis_router',
            'analysis_router', 'image_router', 'stripe_router', 
-           'stripe_billing_router', 'catalogue_router']
+           'stripe_billing_router', 'catalogue_router', 'scrub_router']
