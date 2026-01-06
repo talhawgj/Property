@@ -153,3 +153,35 @@ async def list_jobs(
     
     result = await db.execute(query)
     return result.scalars().all()
+
+@router.get("/jobs/stats/queue")
+async def get_queue_stats(
+    db: AsyncSession = Depends(get_session)
+):
+    """
+    Get queue statistics for dashboard.
+    """
+    # Count jobs by status
+    total_query = select(BatchJob)
+    total_result = await db.execute(total_query)
+    all_jobs = total_result.scalars().all()
+    
+    total_jobs = len(all_jobs)
+    queued_jobs = len([j for j in all_jobs if j.status == JobStatus.QUEUED])
+    processing_jobs = len([j for j in all_jobs if j.status == JobStatus.PROCESSING])
+    completed_jobs = len([j for j in all_jobs if j.status == JobStatus.COMPLETED])
+    failed_jobs = len([j for j in all_jobs if j.status == JobStatus.FAILED])
+    
+    # Get system limits (could be from config)
+    max_concurrent_jobs = 5  # This should come from config
+    available_slots = max(0, max_concurrent_jobs - processing_jobs)
+    
+    return {
+        "total_jobs": total_jobs,
+        "queued_jobs": queued_jobs,
+        "processing_jobs": processing_jobs,
+        "completed_jobs": completed_jobs,
+        "failed_jobs": failed_jobs,
+        "max_concurrent_jobs": max_concurrent_jobs,
+        "available_slots": available_slots
+    }
