@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 S3_BUCKET = "attom-scrubber-data"
 S3_REGION = "us-east-2"
 S3_PREFIX = "scrubbed/"
+S3_UPLOADS_PREFIX = "uploads/"
 
 
 def get_s3_client():
@@ -40,6 +41,7 @@ class S3ScrubService:
         self.bucket = S3_BUCKET
         self.region = S3_REGION
         self.prefix = S3_PREFIX
+        self.uploads_prefix = S3_UPLOADS_PREFIX
         self._client: Optional[boto3.client] = None
 
     @property
@@ -290,6 +292,102 @@ class S3ScrubService:
 
         except ClientError as e:
             logger.error(f"Error deleting directory from S3: {e}")
+            raise
+
+    def upload_file(
+        self,
+        file_content: bytes,
+        filename: str,
+        content_type: str = "text/csv",
+        subdirectory: Optional[str] = None,
+    ) -> dict:
+        """
+        Upload a file to the uploads folder in S3.
+
+        Args:
+            file_content: The file content as bytes.
+            filename: The name of the file.
+            content_type: MIME type of the file.
+            subdirectory: Optional subdirectory within uploads/.
+
+        Returns:
+            Dict with upload details including the S3 key and URL.
+        """
+        # Build the S3 key
+        if subdirectory:
+            key = f"{self.uploads_prefix}{subdirectory}/{filename}"
+        else:
+            key = f"{self.uploads_prefix}{filename}"
+
+        try:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=file_content,
+                ContentType=content_type,
+            )
+
+            # Generate the S3 URL
+            url = f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{key}"
+
+            logger.info(f"Uploaded file to S3: {key} ({len(file_content)} bytes)")
+
+            return {
+                "key": key,
+                "bucket": self.bucket,
+                "filename": filename,
+                "size": len(file_content),
+                "url": url,
+                "content_type": content_type,
+            }
+
+        except ClientError as e:
+            logger.error(f"Error uploading file to S3: {e}")
+            raise
+
+    def list_uploaded_files(self, prefix: Optional[str] = None) -> list[dict]:
+        """
+        List all files in the uploads folder.
+
+        Args:
+            prefix: Optional subdirectory prefix to filter by.
+
+        Returns:
+            List of file metadata dictionaries.
+        """
+        search_prefix = self.uploads_prefix
+        if prefix:
+            search_prefix = f"{self.uploads_prefix}{prefix}/"
+
+        try:
+            paginator = self.client.get_paginator("list_objects_v2")
+            files = []
+
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=search_prefix):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if key.endswith("/"):
+                        continue
+
+                    relative_path = key[len(self.uploads_prefix):] if key.startswith(self.uploads_prefix) else key
+                    name = key.split("/")[-1]
+
+                    files.append(
+                        {
+                            "key": key,
+                            "name": name,
+                            "relative_path": relative_path,
+                            "size": obj["Size"],
+                            "last_modified": obj["LastModified"].isoformat(),
+                        }
+                    )
+
+            files.sort(key=lambda x: x["last_modified"], reverse=True)
+            logger.info(f"Found {len(files)} files in uploads")
+            return files
+
+        except ClientError as e:
+            logger.error(f"Error listing uploaded files: {e}")
             raise
 
 

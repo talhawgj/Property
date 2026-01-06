@@ -6,9 +6,10 @@ that have been scrubbed and stored in the attom-scrubber-data S3 bucket.
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -49,6 +50,106 @@ class PresignedUrlResponse(BaseModel):
     url: str
     file_path: str
     expires_in: int
+
+
+class UploadResponse(BaseModel):
+    """Response model for file upload."""
+
+    key: str
+    bucket: str
+    filename: str
+    size: int
+    url: str
+    content_type: str
+    message: str
+
+
+@router.post("/upload", response_model=UploadResponse)
+async def upload_file(
+    file: UploadFile = File(..., description="CSV file to upload"),
+    subdirectory: Optional[str] = Query(None, description="Optional subdirectory within uploads/"),
+) -> UploadResponse:
+    """
+    Upload a CSV file to the S3 uploads folder.
+
+    Args:
+        file: The CSV file to upload.
+        subdirectory: Optional subdirectory (defaults to current date).
+
+    Returns:
+        Upload details including the S3 key and URL.
+    """
+    # Validate file type
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    if not file.filename.lower().endswith(('.csv', '.xlsx')):
+        raise HTTPException(status_code=400, detail="Only CSV and XLSX files are allowed")
+
+    try:
+        # Read file content
+        content = await file.read()
+
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="File is empty")
+
+        # Use current date as subdirectory if not provided
+        if not subdirectory:
+            subdirectory = datetime.now().strftime("%Y-%m-%d")
+
+        # Determine content type
+        content_type = "text/csv" if file.filename.lower().endswith('.csv') else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        # Upload to S3
+        result = s3_scrub_service.upload_file(
+            file_content=content,
+            filename=file.filename,
+            content_type=content_type,
+            subdirectory=subdirectory,
+        )
+
+        logger.info(f"File uploaded successfully: {result['key']}")
+
+        return UploadResponse(
+            **result,
+            message=f"File '{file.filename}' uploaded successfully to {result['key']}",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+
+
+@router.get("/uploads", response_model=FileListResponse)
+async def list_uploaded_files(
+    prefix: Optional[str] = Query(None, description="Filter by subdirectory"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of files to return"),
+) -> FileListResponse:
+    """
+    List all uploaded files in S3.
+
+    Args:
+        prefix: Optional subdirectory to filter by.
+        limit: Maximum number of files to return.
+
+    Returns:
+        List of uploaded file metadata.
+    """
+    try:
+        files = s3_scrub_service.list_uploaded_files(prefix=prefix)
+        limited_files = files[:limit]
+
+        return FileListResponse(
+            files=[FileInfo(**f) for f in limited_files],
+            total_count=len(files),
+            directory=prefix,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to list uploaded files: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
 
 @router.get("/files", response_model=FileListResponse)
