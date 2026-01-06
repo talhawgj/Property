@@ -36,6 +36,8 @@ class PropertyCreate(BaseModel):
     days_on_market: Optional[int] = Field(None, alias="DaysOnMarket")
     description: Optional[str] = Field(None)
     images: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    analysis: Optional[Dict[str, Any]] = Field(None, description="Analysis results from /analyze/{gid}")
+    user_name: Optional[str] = Field(None, description="User who added the property")
 
 
 class PropertyUpdate(BaseModel):

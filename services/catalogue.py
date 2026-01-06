@@ -77,10 +77,19 @@ class PropertyCatalogueService:
         
         official_parcel = search_results[0]
         gid = official_parcel.gid
-        analyze_result_data = await self.analysis_service.get_analysis(
-            gid=gid, db=db
-        )
+        
+        # Use provided analysis if available, otherwise run analysis
+        if data.analysis:
+            analyze_result_data = data.analysis
+        else:
+            analyze_result_data = await self.analysis_service.get_analysis(
+                gid=gid, db=db
+            )
+            
         source_data_dict = data.model_dump(exclude_none=True, by_alias=True)
+        # Remove analysis from source_data since it goes to result_data
+        source_data_dict.pop('analysis', None)
+        
         query = select(AnalysisResult).where(AnalysisResult.parcel_gid == gid)
         result = await db.execute(query)
         existing_record = result.scalar_one_or_none()
