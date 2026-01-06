@@ -87,11 +87,24 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="Only CSV and XLSX files are allowed")
 
     try:
-        # Read file content
-        content = await file.read()
+        # Read file in chunks to handle large files better
+        chunks = []
+        total_size = 0
+        CHUNK_SIZE = 1024 * 1024  # 1MB chunks for reading
+        
+        while True:
+            chunk = await file.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total_size += len(chunk)
+            
+        content = b''.join(chunks)
 
-        if len(content) == 0:
+        if total_size == 0:
             raise HTTPException(status_code=400, detail="File is empty")
+
+        logger.info(f"Read file {file.filename}: {total_size} bytes")
 
         # Use current date as subdirectory if not provided
         if not subdirectory:

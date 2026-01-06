@@ -302,7 +302,7 @@ class S3ScrubService:
         subdirectory: Optional[str] = None,
     ) -> dict:
         """
-        Upload a file to the uploads folder in S3.
+        Upload a file to the uploads folder in S3 using multipart upload for large files.
 
         Args:
             file_content: The file content as bytes.
@@ -319,24 +319,85 @@ class S3ScrubService:
         else:
             key = f"{self.uploads_prefix}{filename}"
 
+        file_size = len(file_content)
+        
+        # Use multipart upload for files larger than 5MB
+        MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5MB
+        CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunks
+
         try:
-            self.client.put_object(
-                Bucket=self.bucket,
-                Key=key,
-                Body=file_content,
-                ContentType=content_type,
-            )
+            if file_size > MULTIPART_THRESHOLD:
+                # Multipart upload for large files
+                logger.info(f"Using multipart upload for {filename} ({file_size} bytes)")
+                
+                # Create multipart upload
+                multipart = self.client.create_multipart_upload(
+                    Bucket=self.bucket,
+                    Key=key,
+                    ContentType=content_type,
+                )
+                upload_id = multipart["UploadId"]
+                
+                parts = []
+                try:
+                    # Upload parts
+                    part_number = 1
+                    for i in range(0, file_size, CHUNK_SIZE):
+                        chunk = file_content[i:i + CHUNK_SIZE]
+                        
+                        response = self.client.upload_part(
+                            Bucket=self.bucket,
+                            Key=key,
+                            UploadId=upload_id,
+                            PartNumber=part_number,
+                            Body=chunk,
+                        )
+                        
+                        parts.append({
+                            "PartNumber": part_number,
+                            "ETag": response["ETag"],
+                        })
+                        
+                        logger.info(f"Uploaded part {part_number} ({len(chunk)} bytes)")
+                        part_number += 1
+                    
+                    # Complete multipart upload
+                    self.client.complete_multipart_upload(
+                        Bucket=self.bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                        MultipartUpload={"Parts": parts},
+                    )
+                    logger.info(f"Completed multipart upload: {key}")
+                    
+                except Exception as e:
+                    # Abort multipart upload on error
+                    logger.error(f"Multipart upload failed, aborting: {e}")
+                    self.client.abort_multipart_upload(
+                        Bucket=self.bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                    )
+                    raise
+            else:
+                # Simple upload for smaller files
+                self.client.put_object(
+                    Bucket=self.bucket,
+                    Key=key,
+                    Body=file_content,
+                    ContentType=content_type,
+                )
 
             # Generate the S3 URL
             url = f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{key}"
 
-            logger.info(f"Uploaded file to S3: {key} ({len(file_content)} bytes)")
+            logger.info(f"Uploaded file to S3: {key} ({file_size} bytes)")
 
             return {
                 "key": key,
                 "bucket": self.bucket,
                 "filename": filename,
-                "size": len(file_content),
+                "size": file_size,
                 "url": url,
                 "content_type": content_type,
             }
