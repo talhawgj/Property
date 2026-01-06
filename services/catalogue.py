@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 from datetime import datetime
+from sqlalchemy.orm.attributes import flag_modified
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, cast, Float, desc, or_
@@ -225,24 +226,35 @@ class PropertyCatalogueService:
             updates_dict = updates.model_dump(exclude_none=True)
             logger.info(f"[UPDATE] Property {property_id} received updates: {updates_dict}")
             
+            # FIRST: Process source_data merge (if present) - this applies bulk updates
+            if 'source_data' in updates_dict and isinstance(updates_dict['source_data'], dict):
+                current_source.update(updates_dict['source_data'])
+                logger.info(f"[UPDATE] Merged source_data")
+            
+            # SECOND: Apply individual field mappings - these OVERRIDE source_data values
             for field, value in updates_dict.items():
-                if field == 'source_data' and isinstance(value, dict):
-                    # Merge source_data updates directly
-                    current_source.update(value)
+                if field == 'source_data':
+                    continue  # Already processed above
                 elif field == 'analysis' and isinstance(value, dict):
                     # Update result_data for analysis changes
                     current_result = dict(row.result_data or {})
                     current_result.update(value)
                     row.result_data = current_result
+                    flag_modified(row, "result_data")
                 elif field in field_mapping:
                     source_key = field_mapping[field]
                     current_source[source_key] = value
                     logger.info(f"[UPDATE] Set {source_key} = {value}")
             
+            # Explicitly set the JSONB column to trigger SQLAlchemy change detection
             row.csv_source_data = current_source
             row.updated_at = datetime.utcnow()
             
+            # Flag the JSONB column as modified (required for SQLAlchemy to detect changes)
+            flag_modified(row, "csv_source_data")
+            
             logger.info(f"[UPDATE] Final source_data keys: {list(current_source.keys())}")
+            logger.info(f"[UPDATE] Final source_data: {current_source}")
             
             await db.commit()
             await db.refresh(row)
