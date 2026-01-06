@@ -20,23 +20,38 @@ class PropertyCatalogueService:
         """Helper to map a DB row to the Pydantic response model."""
         source = row.csv_source_data or {}
         result = row.result_data or {}
+        parcels = result.get("parcels", {})
         
         def get_val(key, default=None):
             return source.get(key, default)
 
+        # Extract values with fallbacks between source and result data
         return PropertyResponse(
             property_id=str(row.parcel_gid),
             gid=row.parcel_gid,
             status=get_val("Status", "activelisting"),
-            situs_addr=get_val("StreetAddress") or result.get("parcels", {}).get("situs_addr"),
-            city=get_val("City") or result.get("parcels", {}).get("city"),
-            county=get_val("County") or result.get("parcels", {}).get("county"),
-            latitude=get_val("PropertyLatitude") or result.get("parcels", {}).get("centroid_y"),
-            longitude=get_val("PropertyLongitude") or result.get("parcels", {}).get("centroid_x"),
-            acreage=get_val("Acres") or result.get("parcels", {}).get("acreage"),
+            situs_addr=get_val("StreetAddress") or parcels.get("situs_addr"),
+            city=get_val("City") or parcels.get("city"),
+            county=get_val("County") or parcels.get("county"),
+            latitude=get_val("PropertyLatitude") or parcels.get("centroid_y"),
+            longitude=get_val("PropertyLongitude") or parcels.get("centroid_x"),
+            acreage=get_val("Acres") or parcels.get("acreage"),
             sell_price=get_val("Price"),
             price_per_acre=get_val("PPA"),
             seller_name=get_val("AgentName"),
+            seller_email=get_val("AgentEmail"),
+            seller_phone=get_val("AgentPhone"),
+            seller_office=get_val("AgentOffice"),
+            owner_name=get_val("PartyOwner1NameFull") or parcels.get("owner_name"),
+            state=get_val("State"),
+            zip=get_val("Zip"),
+            property_type=get_val("Type"),
+            beds=get_val("Beds"),
+            baths=get_val("Baths"),
+            built_in=get_val("BuiltIn"),
+            lot_size=get_val("LotSize"),
+            days_on_market=get_val("DaysOnMarket"),
+            description=get_val("Description"),
             images=get_val("images", {}),
             analysis=result,
             source_data=source,
@@ -174,19 +189,70 @@ class PropertyCatalogueService:
             
             if not row:
                 return None
+            
+            # Get current source data
             current_source = dict(row.csv_source_data or {})
-            if updates.status: current_source['Status'] = updates.status
-            if updates.sell_price: current_source['Price'] = updates.sell_price
-            if updates.description: current_source['Description'] = updates.description
-            if updates.images: current_source['images'] = updates.images
-            if updates.extra_data: current_source.update(updates.extra_data)
+            
+            # Map frontend field names to source_data keys
+            field_mapping = {
+                'status': 'Status',
+                'situs_addr': 'StreetAddress',
+                'city': 'City',
+                'state': 'State',
+                'zip_code': 'Zip',
+                'county': 'County',
+                'latitude': 'PropertyLatitude',
+                'longitude': 'PropertyLongitude',
+                'acreage': 'Acres',
+                'sell_price': 'Price',
+                'price_per_acre': 'PPA',
+                'seller_name': 'AgentName',
+                'seller_email': 'AgentEmail',
+                'seller_phone': 'AgentPhone',
+                'seller_office': 'AgentOffice',
+                'owner_name': 'PartyOwner1NameFull',
+                'property_type': 'Type',
+                'beds': 'Beds',
+                'baths': 'Baths',
+                'built_in': 'BuiltIn',
+                'lot_size': 'LotSize',
+                'days_on_market': 'DaysOnMarket',
+                'description': 'Description',
+                'images': 'images',
+            }
+            
+            # Apply updates from PropertyUpdate model
+            updates_dict = updates.model_dump(exclude_none=True)
+            logger.info(f"[UPDATE] Property {property_id} received updates: {updates_dict}")
+            
+            for field, value in updates_dict.items():
+                if field == 'source_data' and isinstance(value, dict):
+                    # Merge source_data updates directly
+                    current_source.update(value)
+                elif field == 'analysis' and isinstance(value, dict):
+                    # Update result_data for analysis changes
+                    current_result = dict(row.result_data or {})
+                    current_result.update(value)
+                    row.result_data = current_result
+                elif field in field_mapping:
+                    source_key = field_mapping[field]
+                    current_source[source_key] = value
+                    logger.info(f"[UPDATE] Set {source_key} = {value}")
+            
             row.csv_source_data = current_source
             row.updated_at = datetime.utcnow()
+            
+            logger.info(f"[UPDATE] Final source_data keys: {list(current_source.keys())}")
+            
             await db.commit()
             await db.refresh(row)
             return self._map_db_to_response(row)
-        except ValueError:
+        except ValueError as e:
+            logger.error(f"[UPDATE] ValueError: {e}")
             return None
+        except Exception as e:
+            logger.error(f"[UPDATE] Exception: {e}", exc_info=True)
+            raise
     async def delete_property(self, db: AsyncSession, property_id: str) -> bool:
         try:
             gid = int(property_id)

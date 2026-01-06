@@ -41,36 +41,69 @@ class PropertyCreate(BaseModel):
 class PropertyUpdate(BaseModel):
     """Schema for updating property fields."""
     status: Optional[str] = None
+    situs_addr: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[Union[int, str]] = None
+    county: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    acreage: Optional[float] = None
     sell_price: Optional[float] = None
+    price_per_acre: Optional[float] = None
+    seller_name: Optional[str] = None
+    seller_email: Optional[str] = None
+    seller_phone: Optional[str] = None
+    seller_office: Optional[str] = None
+    owner_name: Optional[str] = None
+    property_type: Optional[str] = None
+    beds: Optional[Union[float, str]] = None
+    baths: Optional[Union[float, str]] = None
+    built_in: Optional[int] = None
+    lot_size: Optional[int] = None
+    days_on_market: Optional[int] = None
     description: Optional[str] = None
     images: Optional[Dict[str, Any]] = None
-    # Flexible dict to update other JSON fields
-    extra_data: Optional[Dict[str, Any]] = None
+    analysis: Optional[Dict[str, Any]] = None
+    source_data: Optional[Dict[str, Any]] = None
 
 
 class PropertyResponse(BaseModel):
     """Unified response model merging Source and Analysis data."""
-    property_id: Optional[str] # mapped to GID
-    gid: Optional[int]
-    status: Optional[str]
+    property_id: Optional[str] = None  # mapped to GID
+    gid: Optional[int] = None
+    status: Optional[str] = None
     
     # Location
-    situs_addr: Optional[str]
-    city: Optional[str]
-    county: Optional[str]
-    latitude: Optional[float]
-    longitude: Optional[float]
+    situs_addr: Optional[str] = None
+    city: Optional[str] = None
+    county: Optional[str] = None
+    state: Optional[str] = None
+    zip: Optional[Union[int, str]] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     
     # Details
-    acreage: Optional[float]
-    sell_price: Optional[float]
-    price_per_acre: Optional[float]
-    seller_name: Optional[str]
+    acreage: Optional[float] = None
+    sell_price: Optional[float] = None
+    price_per_acre: Optional[float] = None
+    seller_name: Optional[str] = None
+    seller_email: Optional[str] = None
+    seller_phone: Optional[str] = None
+    seller_office: Optional[str] = None
+    owner_name: Optional[str] = None
+    property_type: Optional[str] = None
+    beds: Optional[Union[float, str]] = None
+    baths: Optional[Union[float, str]] = None
+    built_in: Optional[int] = None
+    lot_size: Optional[int] = None
+    days_on_market: Optional[int] = None
+    description: Optional[str] = None
     
     # Data
     images: Optional[Dict[str, Any]] = None
-    analysis: Optional[Dict[str, Any]] = None # The full analysis result
-    source_data: Optional[Dict[str, Any]] = None # The full source CSV data
+    analysis: Optional[Dict[str, Any]] = None  # The full analysis result
+    source_data: Optional[Dict[str, Any]] = None  # The full source CSV data
     
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

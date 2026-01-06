@@ -47,7 +47,7 @@ async def list_properties(
     except Exception as e:
         logger.error(f"Error listing properties: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
+ 
 @router.get("/search", response_model=PropertySearchResponse)
 async def search_properties(
     status: Optional[str] = Query(None),
