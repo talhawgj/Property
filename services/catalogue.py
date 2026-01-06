@@ -62,21 +62,27 @@ class PropertyCatalogueService:
 
     async def create_property(self, db: AsyncSession, data: PropertyCreate) -> str:
         """Orchestrates search -> analyze -> save."""
-        # 1. Search for Parcel
-        search_results = []
+        # 1. Use provided GID directly (frontend has already validated the parcel exists)
         if data.gid:
-            search_results = await self.parcel_search.get_by_filters(db=db, limit=1)
-            
-        if not search_results and data.latitude:
+            gid = data.gid
+        elif data.latitude and data.longitude:
+            # Search by coordinates if no GID provided
             search_results = await self.parcel_search.get_by_coordinates(
                 db=db, latitude=data.latitude, longitude=data.longitude
             )
-
-        if not search_results:
-            raise ValueError("Parcel not found for provided GID or coordinates.")
-        
-        official_parcel = search_results[0]
-        gid = official_parcel.gid
+            if not search_results:
+                raise ValueError("Parcel not found for provided coordinates.")
+            gid = search_results[0].gid
+        elif data.prop_id or data.county:
+            # Search by property ID or county
+            search_results = await self.parcel_search.get_by_filters(
+                db=db, prop_id=data.prop_id, county=data.county
+            )
+            if not search_results:
+                raise ValueError("Parcel not found for provided prop_id or county.")
+            gid = search_results[0].gid
+        else:
+            raise ValueError("Must provide either gid, coordinates, or prop_id/county to identify the parcel.")
         
         # Use provided analysis if available, otherwise run analysis
         if data.analysis:
@@ -89,6 +95,7 @@ class PropertyCatalogueService:
         source_data_dict = data.model_dump(exclude_none=True, by_alias=True)
         # Remove analysis from source_data since it goes to result_data
         source_data_dict.pop('analysis', None)
+        source_data_dict.pop('user_name', None)  # user_name is not stored in csv_source_data
         
         query = select(AnalysisResult).where(AnalysisResult.parcel_gid == gid)
         result = await db.execute(query)
