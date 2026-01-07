@@ -4,11 +4,12 @@ Prompt model for AI property description templates.
 
 import json
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel, Column
 from sqlalchemy import Text
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 class Prompt(SQLModel, table=True):
@@ -20,7 +21,7 @@ class Prompt(SQLModel, table=True):
     prompt_id: str = Field(primary_key=True, description="Unique prompt identifier")
     general_rules: Optional[str] = Field(default=None, sa_column=Column(Text), description="General rules for the prompt")
     markdown_handling: Optional[str] = Field(default=None, sa_column=Column(Text), description="Markdown formatting rules")
-    required_output: Optional[str] = Field(default=None, sa_column=Column(Text), description="Required output structure (JSON)")
+    required_output: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB), description="Required output structure (JSONB)")
     style_and_output: Optional[str] = Field(default=None, sa_column=Column(Text), description="Style and output guidelines")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
     updated_at: datetime = Field(
@@ -36,7 +37,7 @@ class PromptResponse(SQLModel):
     prompt_id: str
     general_rules: Optional[str] = None
     markdown_handling: Optional[str] = None
-    required_output: Optional[Any] = None  # Can be string or dict
+    required_output: Optional[str] = None  # Always return as JSON string for frontend
     style_and_output: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -44,19 +45,14 @@ class PromptResponse(SQLModel):
     @field_validator('required_output', mode='before')
     @classmethod
     def parse_required_output(cls, v):
-        """Parse required_output if it's a dict, stringify if needed."""
+        """Convert required_output dict to JSON string for frontend."""
         if v is None:
             return None
         if isinstance(v, dict):
             return json.dumps(v)
         if isinstance(v, str):
-            # Try to parse and re-stringify to ensure it's valid JSON
-            try:
-                parsed = json.loads(v)
-                return json.dumps(parsed)
-            except json.JSONDecodeError:
-                return v
-        return str(v)
+            return v
+        return json.dumps(v)
 
 
 class PromptUpdate(SQLModel):
@@ -69,10 +65,19 @@ class PromptUpdate(SQLModel):
 
     @field_validator('required_output', mode='before')
     @classmethod
+    def parse_required_output(cls, v):, will be converted to dict
+    style_and_output: Optional[str] = None
+
+    @field_validator('required_output', mode='before')
+    @classmethod
     def parse_required_output(cls, v):
-        """Ensure required_output is stored as JSON string."""
+        """Convert required_output to dict for JSONB storage."""
         if v is None:
             return None
         if isinstance(v, dict):
-            return json.dumps(v)
-        return v
+            return v
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v
