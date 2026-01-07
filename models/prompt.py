@@ -60,12 +60,7 @@ class PromptUpdate(SQLModel):
 
     general_rules: Optional[str] = None
     markdown_handling: Optional[str] = None
-    required_output: Optional[Any] = None  # Can be string or dict
-    style_and_output: Optional[str] = None
-
-    @field_validator('required_output', mode='before')
-    @classmethod
-    def parse_required_output(cls, v):, will be converted to dict
+    required_output: Optional[Any] = None  # Can be string or dict, will be converted to dict
     style_and_output: Optional[str] = None
 
     @field_validator('required_output', mode='before')
@@ -81,3 +76,4 @@ class PromptUpdate(SQLModel):
                 return json.loads(v)
             except json.JSONDecodeError:
                 return v
+        return v
