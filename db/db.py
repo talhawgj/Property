@@ -36,7 +36,6 @@ async def init_db():
         async with engine.begin() as conn:
             result = await conn.execute(text("SELECT PostGIS_Version();"))
             print(result.scalar())
-            from models.job import BatchJob  # Import models here to register them
             await conn.run_sync(SQLModel.metadata.create_all)
         logger.info("Database initialization completed successfully")
     except Exception as e:
