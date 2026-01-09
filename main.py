@@ -1,8 +1,9 @@
 from logging.handlers import RotatingFileHandler
-from fastapi import Depends, FastAPI, HTTPException, Header, Path
+from fastapi import Depends, FastAPI, HTTPException, Header, Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pathlib import Path
 from routes import water_router, parcel_router, gis_router,image_router, analysis_router, stripe_router, stripe_billing_router,require_api_token, catalogue_router, scrub_router, prompt_router
 from utils.webdriver_pool import WebDriverPool
 from services.batch import BatchService
@@ -70,7 +71,42 @@ async def health_check():
     Health check endpoint to verify if the API is running.
     Returns a simple message indicating the API status.
     """
-    return {"status": "ok", "message": "API is running"}    
+    return {"status": "ok", "message": "API is running"}
+
+LOG_MAP = {
+    "analysis": Path("logs/analysis.log"),
+    "batch": Path("logs/batch_analysis.log"),
+}
+
+@app.get("/logs/list", summary="List available logs")
+async def list_logs():
+    return JSONResponse({"logs": list(LOG_MAP.keys())})
+
+@app.get("/logs", response_class=PlainTextResponse,
+         summary="Fetch one log by name with pagination")
+async def get_log(name: str, lines: int = 200, offset: int = 0):
+    """
+    Tail-first pagination:
+    - lines: number of lines to return
+    - offset: how many lines to skip from the end (0 for newest block,
+              then increase by 'lines' each time for older logs)
+    """
+    path = LOG_MAP.get(name)
+    if not path:
+        return PlainTextResponse("invalid log name", status_code=400)
+    if not path.exists():
+        return PlainTextResponse(f"{path} not found", status_code=404)
+
+    with path.open("r", encoding="utf-8", errors="ignore") as f:
+        all_lines = f.readlines()
+
+    total = len(all_lines)
+    if offset >= total:
+        return PlainTextResponse("", status_code=204)  # no more logs
+
+    start = max(total - offset - lines, 0)
+    end = total - offset
+    return "".join(all_lines[start:end])
 
 app.include_router(parcel_router)
 app.include_router(gis_router)
