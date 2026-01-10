@@ -12,6 +12,19 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '1G'
-    }
+    },
+    {
+      name: "dashboard-app",
+      script: "npm",
+      args: "start",
+      cwd: "./dashboard",
+      env: {
+        NODE_ENV: "production",
+        PORT: "4173",
+      },
+      error_file: "~/.pm2/logs/dashboard-app-error.log",
+      out_file: "~/.pm2/logs/dashboard-app-out.log",
+      merge_logs: true,
+    },
   ]
 };
