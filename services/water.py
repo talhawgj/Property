@@ -16,16 +16,10 @@ class WaterAnalysisService:
     Supports analysis by Database GID OR Raw Geometry input.
     """
 
-    async def _get_target_geometry(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom_input: Optional[str] = None
-    ) -> Tuple[str, Any]:
+    async def _get_target_geometry( self, session: AsyncSession, gid: Optional[int] = None, geom_input: Optional[str] = None) -> Tuple[str, Any]:
         """
         Internal Helper: Resolves the target geometry to WKT and Shapely object.
         """
-        # 1. Handle Raw Geometry Input
         if geom_input:
             try:
                 input_str = geom_input.strip()
@@ -55,24 +49,14 @@ class WaterAnalysisService:
 
         raise ValueError("Either 'gid' or 'geom_input' must be provided.")
 
-    # ---------------------------------------------------------
-    # 1. Water Wells Analysis
-    # ---------------------------------------------------------
-    async def analyze_water_wells(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom: Optional[str] = None
-    ) -> Dict[str, Any]:
+    async def analyze_water_wells(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Checks intersection with Groundwater Wells. 
         If no intersection, finds the nearest well.
         """
         target_wkt, _ = await self._get_target_geometry(session, gid, geom)
-
-        # 1. Check Intersection
         sql_intersect = text("""
-            SELECT welltype, proposedus, boreholede, injuriousw 
+            SELECT welltype, proposedus, boreholede, injuriousw ,wellowner
             FROM water_wells
             WHERE ST_Intersects(geom, ST_GeomFromText(:wkt, 4326))
         """)
@@ -86,14 +70,13 @@ class WaterAnalysisService:
                     "WellType": r[0],
                     "ProposedUse": r[1],
                     "Depth": float(r[2]) if r[2] is not None else None,
-                    "Injurious": r[3]
+                    "Injurious": r[3],
+                    "Owner": r[4]
                 } for r in rows
             ]
             return {"intersects": True, "count": len(wells), "wells": wells}
-
-        # 2. Find Nearest (if no intersection)
         sql_nearest = text("""
-            SELECT welltype, proposedus, boreholede, injuriousw,
+            SELECT welltype, proposedus, boreholede, injuriousw,wellowner,
                    ST_Distance(ST_GeomFromText(:wkt, 4326)::geography, geom::geography) AS distance_m
             FROM water_wells
             ORDER BY geom <-> ST_GeomFromText(:wkt, 4326)
@@ -113,28 +96,19 @@ class WaterAnalysisService:
                     "ProposedUse": nearest[1],
                     "Depth": float(nearest[2]) if nearest[2] is not None else None,
                     "Injurious": nearest[3],
-                    "distance_m": round(nearest[4], 2)
+                    "Owner": nearest[4],
+                    "distance_m": round(nearest[5], 2)
                 }
             }
             
         return {"intersects": False, "count": 0, "wells": []}
 
-    # ---------------------------------------------------------
-    # 2. Wetlands Analysis
-    # ---------------------------------------------------------
-    async def analyze_wetlands(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom: Optional[str] = None
-    ) -> Dict[str, Any]:
+    async def analyze_wetlands(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Analyzes NWI Wetlands intersection, calculating area and percentage.
         Uses EPSG:3083 for accurate area calculations.
         """
         target_wkt, _ = await self._get_target_geometry(session, gid, geom)
-
-        # Calculate total parcel area first
         area_query = text("""
             SELECT ST_Area(ST_Transform(ST_GeomFromText(:wkt, 4326), 3083))
         """)
@@ -143,10 +117,7 @@ class WaterAnalysisService:
         
         if total_area_m2 == 0:
             return {"error": "Invalid or zero parcel area"}
-
         total_area_acres = total_area_m2 / 4046.86
-
-        # Detailed intersection query
         sql = text("""
             SELECT 
                 w.wetland_type,
@@ -157,11 +128,8 @@ class WaterAnalysisService:
 
         res = await session.execute(sql, {"wkt": target_wkt})
         rows = res.fetchall()
-
-        # Aggregate results
         aggregated = defaultdict(lambda: {"area_acres": 0.0, "percentage": 0.0})
         total_wetland_acres = 0.0
-
         for w_type, area_m2 in rows:
             if area_m2 > 0:
                 acres = area_m2 / 4046.86
@@ -187,15 +155,7 @@ class WaterAnalysisService:
             "cleared_percentage": round(cleared_pct, 2)
         }
 
-    # ---------------------------------------------------------
-    # 3. Ponds Analysis
-    # ---------------------------------------------------------
-    async def analyze_ponds(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom: Optional[str] = None
-    ) -> Dict[str, Any]:
+    async def analyze_ponds(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Analyzes Ponds (LakePond <= 12 acres) from `radcorp_water`.
         Falls back to 'wetlands' if no specific pond found.
@@ -231,8 +191,8 @@ class WaterAnalysisService:
             }
         
         return {"intersects": False, "pond_area_acres": 0.0, "unique_pond_count": 0}
-    async def analyze_lakes(
-        self,session: AsyncSession,gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
+   
+    async def analyze_lakes(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Analyzes Lakes (LakePond > 12 acres) from `radcorp_water`.
         Calculates shared perimeter (shoreline) and area.
@@ -271,6 +231,7 @@ class WaterAnalysisService:
             "lake_perimeter_ft": round(total_perimeter_ft, 2),
             "unique_lake_count": count
         }
+   
     async def analyze_streams(self,session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Calculates total length of streams intersecting the property.
@@ -332,7 +293,6 @@ class WaterAnalysisService:
 
         cleared = max(total_acres - hazardous_area_acres, 0)
         
-        # Determine primary zone (simplified)
         primary_zone = results[0]["flood_zone"] if results else "X"
 
         return {
@@ -343,15 +303,7 @@ class WaterAnalysisService:
             "details": results
         }
 
-    # ---------------------------------------------------------
-    # 7. Sea/Ocean Analysis
-    # ---------------------------------------------------------
-    async def analyze_sea_ocean(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom: Optional[str] = None
-    ) -> Dict[str, Any]:
+    async def analyze_sea_ocean(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """Calculates intersection length with Sea/Ocean boundaries."""
         target_wkt, _ = await self._get_target_geometry(session, gid, geom)
 
@@ -374,15 +326,7 @@ class WaterAnalysisService:
             "sea_ocean_length_ft": round(total_ft, 2)
         }
 
-    # ---------------------------------------------------------
-    # 8. Shoreline Types
-    # ---------------------------------------------------------
-    async def analyze_shoreline(
-        self, 
-        session: AsyncSession, 
-        gid: Optional[int] = None, 
-        geom: Optional[str] = None
-    ) -> Dict[str, Any]:
+    async def analyze_shoreline(self, session: AsyncSession, gid: Optional[int] = None, geom: Optional[str] = None) -> Dict[str, Any]:
         """
         Aggregates shoreline lengths from Wetlands (Riverine, Lake) 
         and WaterBodies (Sea/Ocean).

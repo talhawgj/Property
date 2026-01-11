@@ -13,6 +13,7 @@ from sqlalchemy.sql import text, select, func
 
 from db import SessionLocal
 from models.job import BatchJob, JobStatus, JobPriority
+from models.lead_client import LeadClient
 from .parcel_analysis import AnalysisService
 from config import config
 batch_logger = logging.getLogger("batch_analysis")
@@ -221,9 +222,11 @@ class BatchService:
                 df = pd.read_csv(BytesIO(file_bytes)).fillna("")
         except Exception as e:
             raise ValueError(f"File parsing failed: {e}")
+
         if column_mapping:
             clean_map = {k.strip(): v.strip() for k, v in column_mapping.items() if k and v}
             df = df.rename(columns=clean_map)
+
         col_map = {}
         for col in df.columns:
             cl = col.lower()
@@ -233,6 +236,7 @@ class BatchService:
                 col_map[col] = "PropertyLongitude"
         if col_map:
             df = df.rename(columns=col_map)
+
         total_rows = len(df)
         points = []
         for idx, row in df.iterrows():
@@ -241,6 +245,15 @@ class BatchService:
             except: continue
             
         gid_map = await self._fetch_gids_bulk(points, db)
+        
+        # --- FETCH MAPPINGS: Load Lead Clients ---
+        county_master_map = {}
+        try:
+            result = await db.execute(select(LeadClient))
+            clients = result.scalars().all()
+            county_master_map = {c.county.lower().strip(): c.master_phone for c in clients if c.county}
+        except Exception as e:
+            batch_logger.error(f"Failed to load Lead Clients for phone injection: {e}")
         concurrency_limit = config.BATCH_CONCURRENCY if hasattr(config, 'BATCH_CONCURRENCY') else 10
         sem = asyncio.Semaphore(concurrency_limit)
         completed_count = 0
@@ -251,9 +264,13 @@ class BatchService:
             async with sem:
                 if job_state and job_state.get("cancelled"):
                     return None
-                
                 gid = gid_map.get(int(idx))
                 result_data = row_data.copy()
+                row_county = str(result_data.get("County", "")).lower().strip()
+                if row_county in county_master_map:
+                    result_data["Master Phone #"] = county_master_map[row_county]
+                else:
+                    result_data["Master Phone #"] = ""
                 is_success = True
                 try:
                     if not gid:
@@ -267,19 +284,17 @@ class BatchService:
                                 processing_mode="batch", 
                                 batch_id=job_id, 
                                 generate_images=(not dry_run),
-                                csv_context=row_data
+                                csv_context=result_data 
                             )
                             result_data["analysis"] = res
                 except Exception as e:
                     result_data["error"] = str(e)
                     is_success = False
-
                 completed_count += 1
                 if progress_callback:
                     try:
                         await progress_callback(completed_count, total_rows, is_success)
                     except: pass
-                
                 return result_data
         tasks = [asyncio.create_task(_process_row(i, row.to_dict())) for i, row in df.iterrows()]
         results = await asyncio.gather(*tasks)
