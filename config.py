@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     DASHBOARD_API_URL: str | None = None
     BATCH_CONCURRENCY: int = 10
     UPLOAD_DIR: str = "./uploads"
+    JWT_SECRET_KEY: str = ""
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     model_config = SettingsConfigDict(env_file=".env",extra='ignore')
 
 config = Settings()

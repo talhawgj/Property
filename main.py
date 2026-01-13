@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path
-from routes import water_router, parcel_router, gis_router,image_router, analysis_router, stripe_router, stripe_billing_router,require_api_token, catalogue_router, scrub_router, prompt_router, lead_client_router
+from routes import water_router, parcel_router, gis_router,image_router, analysis_router, stripe_router, stripe_billing_router,require_api_token, catalogue_router, scrub_router, prompt_router, lead_client_router, auth_router
 from utils.webdriver_pool import WebDriverPool
 from services.batch import BatchService
 from db import init_db
@@ -117,6 +117,7 @@ app.include_router(catalogue_router)
 app.include_router(scrub_router)
 app.include_router(prompt_router)
 app.include_router(lead_client_router)
+app.include_router(auth_router)
 app.include_router(stripe_router, prefix="/api", tags=["stripe-webhook"])
 app.include_router(stripe_billing_router, prefix="/api", tags=["stripe-billing"])
 
