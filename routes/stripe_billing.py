@@ -16,9 +16,9 @@ if not PRICE_ID_MONTHLY:
     raise RuntimeError("STRIPE_PRICE_ID_MONTHLY not set")
 
 # Optional: customize where Stripe Checkout returns after success/cancel
-SUCCESS_URL = config.CHECKOUT_SUCCESS_URL or "https://api.texasparcels.com/docs#/Search/trigger_analysis_search_trigger_analysis_post"
-CANCEL_URL  = config.CHECKOUT_CANCEL_URL  or "https://api.texasparcels.com/docs#/default/health_check_health_get"
-PORTAL_RETURN_URL = config.PORTAL_RETURN_URL or "https://api.texasparcels.com/docs#/"
+SUCCESS_URL = config.CHECKOUT_SUCCESS_URL or "https://https://api.texasparcels.com/docs#/Search/trigger_analysis_search_trigger_analysis_post"
+CANCEL_URL  = config.CHECKOUT_CANCEL_URL  or "https://https://api.texasparcels.com/docs#/default/health_check_health_get"
+PORTAL_RETURN_URL = config.PORTAL_RETURN_URL or "https://https://api.texasparcels.com/docs#/"
 
 
 
