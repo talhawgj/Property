@@ -6,12 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from models.user import User
 from config import config
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from db import get_session
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Password hashing context with bcrypt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# HTTP Bearer token security
+security = HTTPBearer()
 
 class AuthService:
     """
@@ -145,3 +151,72 @@ class AuthService:
         except Exception as e:
             logger.error(f"Error during authentication: {e}")
             return None
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_session)
+) -> User:
+    """
+    Dependency to get the current authenticated user from JWT token.
+    
+    Args:
+        credentials: HTTP Bearer token from Authorization header
+        db: Database session
+        
+    Returns:
+        User object if token is valid
+        
+    Raises:
+        HTTPException: 401 if token is invalid or user not found
+    """
+    token = credentials.credentials
+    
+    # Verify and decode token
+    payload = AuthService.verify_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Extract user ID from token
+    user_id_str = payload.get("sub")
+    if not user_id_str:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    try:
+        user_id = int(user_id_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID in token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Get user from database
+    result = await db.execute(
+        select(User).where(User.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return user

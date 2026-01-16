@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import get_session
 from schemas.user import SigninRequest, TokenResponse, UserResponse
-from services.auth import AuthService
+from services.auth import AuthService, get_current_user
+from models.user import User
 import logging
 
 logger = logging.getLogger(__name__)
@@ -62,3 +63,48 @@ async def signin(
         token_type="bearer",
         user=UserResponse.model_validate(user)
     )
+
+
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    summary="Get Current User",
+    description="Get the currently authenticated user's information"
+)
+async def get_me(current_user: User = Depends(get_current_user)):
+    """
+    Get current authenticated user information.
+    
+    Requires valid JWT token in Authorization header.
+    
+    Args:
+        current_user: Current authenticated user (injected by dependency)
+        
+    Returns:
+        UserResponse with current user information
+    """
+    return UserResponse.model_validate(current_user)
+
+
+@router.post(
+    "/verify",
+    summary="Verify Token",
+    description="Verify if a JWT token is valid and not expired"
+)
+async def verify_token(current_user: User = Depends(get_current_user)):
+    """
+    Verify if the provided JWT token is valid.
+    
+    Requires valid JWT token in Authorization header.
+    
+    Args:
+        current_user: Current authenticated user (injected by dependency)
+        
+    Returns:
+        Success message if token is valid
+    """
+    return {
+        "valid": True,
+        "user_id": current_user.id,
+        "email": current_user.email
+    }
